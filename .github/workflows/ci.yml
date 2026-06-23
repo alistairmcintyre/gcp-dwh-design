@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  dbt:
+    name: dbt build + lint (DuckDB)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync
+      - name: dbt deps
+        run: uv run dbt deps --project-dir dbt --profiles-dir dbt
+      - name: Generate raw data
+        run: uv run python scripts/generate_test_data.py --users 800 --days 30
+      - name: dbt build (DuckDB)
+        run: uv run dbt build --project-dir dbt --profiles-dir dbt --target dev
+      - name: Source freshness
+        run: uv run dbt source freshness --project-dir dbt --profiles-dir dbt --target dev
+      - name: SQLFluff lint
+        run: uv run sqlfluff lint dbt/models
+      - name: DAG compile check
+        run: uv run python tests/check_dags_compile.py
+
+  dag-integrity:
+    name: DAG integrity (KubernetesPodOperator)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Airflow 2.10 + cncf.kubernetes provider
+        # No dbt/cosmos needed: the DAGs only import the KubernetesPodOperator. Pin Airflow with its
+        # constraints file so the provider resolves cleanly.
+        run: |
+          python -m pip install --upgrade pip
+          pip install "apache-airflow==2.10.5" apache-airflow-providers-cncf-kubernetes pytest \
+            --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.12.txt"
+      - name: DAG integrity
+        env:
+          DAG_INTEGRITY_DAG_DIR: airflow/dags
+        run: pytest tests/test_dag_integrity.py -q

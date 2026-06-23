@@ -1,0 +1,30 @@
+version: 2
+
+exposures:
+  - name: marketing_acquisition_dashboard
+    label: "Marketing Acquisition Dashboard"
+    type: dashboard
+    maturity: high
+    url: https://bi.example.com/dashboards/acquisition
+    description: >
+      Daily installs, registrations and first deposits by acquisition channel and platform; used by the
+      marketing team to monitor campaign performance and channel mix.
+    depends_on:
+      - ref('fct_acquisition_events')
+    owner:
+      name: Marketing Analytics
+      email: marketing-analytics@example.com
+
+  - name: player_activity_dashboard
+    label: "Player Activity & GGR Dashboard"
+    type: dashboard
+    maturity: medium
+    url: https://bi.example.com/dashboards/player-activity
+    description: >
+      Daily bet volume, GGR, deposits and withdrawals by user and acquisition channel; used by trading and
+      finance for revenue and player-value reporting.
+    depends_on:
+      - ref('fct_user_activity')
+    owner:
+      name: Trading & Finance
+      email: trading-analytics@example.com

@@ -1,0 +1,28 @@
+[sqlfluff]
+templater = dbt
+dialect = duckdb
+# Keep the rule set pragmatic so the demo stays readable rather than fighting the linter.
+exclude_rules = RF04, ST06, AM04, RF01
+max_line_length = 120
+
+[sqlfluff:templater:dbt]
+project_dir = dbt
+profiles_dir = dbt
+profile = dbt_testing
+target = dev
+
+[sqlfluff:indentation]
+tab_space_size = 4
+indent_unit = space
+
+[sqlfluff:layout:type:comma]
+line_position = trailing
+
+[sqlfluff:rules:capitalisation.keywords]
+capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.identifiers]
+extended_capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.functions]
+extended_capitalisation_policy = lower

@@ -1,0 +1,59 @@
+name: "dbt_testing"
+version: "1.0.0"
+config-version: 2
+
+profile: "dbt_testing"
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# Broad compatibility: dbt-core 1.8+ (the local dbt 1.10 loop and the dbt baked into the Composer image).
+require-dbt-version: [">=1.8.0", "<2.0.0"]
+
+vars:
+  # Incremental window. Defaults cover "all history" for a first/full build; Airflow overrides these
+  # with the run's data interval so each scheduled run / backfill is idempotent.
+  start_date: "1900-01-01"
+  end_date: "2999-12-31"
+  # Toggle the Elementary package models + on-run-end hook (escape hatch per-warehouse).
+  enable_elementary: true
+
+models:
+  dbt_testing:
+    staging:
+      +materialized: view
+      +schema: staging
+    intermediate:
+      +materialized: ephemeral
+      +schema: intermediate
+    marts:
+      +materialized: table
+      +schema: marts
+  # Elementary's own models (data-observability tables). Enabled on warehouses where Elementary is
+  # first-class (e.g. BigQuery); skipped on DuckDB, whose dialect Elementary doesn't fully support.
+  elementary:
+    +enabled: "{{ var('enable_elementary', true) and target.type != 'duckdb' }}"
+    +schema: elementary
+
+seeds:
+  dbt_testing:
+    +schema: seeds
+
+snapshots:
+  dbt_testing:
+    +schema: snapshots
+
+on-run-end:
+  - "{% if var('enable_elementary', true) and target.type != 'duckdb' %}{{ elementary.on_run_end() }}{% endif %}"
+
+flags:
+  send_anonymous_usage_stats: false
+  use_colors: true

@@ -1,0 +1,44 @@
+# Build the dbt image and push it to Artifact Registry — authenticating with a long-lived
+# service-account JSON key stored as a GitHub secret (the "old way"). Kept for reference; prefer the
+# keyless WIF workflow (deploy-dbt-image-wif.yml). See airflow/README.md for why.
+#
+# Setup: create a key for a SA with `roles/artifactregistry.writer`, store the JSON as repo secret
+#   GCP_SA_KEY. (Many orgs disable SA-key creation via the iam.disableServiceAccountKeyCreation policy.)
+name: Deploy dbt image (SA key)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["dbt/**", "airflow/docker/**"]
+
+env:
+  REGION: europe-west2
+  PROJECT_ID: your-gcp-project
+  REPO: dbt-images          # Artifact Registry repository name
+  IMAGE: dbt
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}   # long-lived JSON key (the thing to move away from)
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      - name: Build and push
+        run: |
+          IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${IMAGE}"
+          docker build -f airflow/docker/Dockerfile \
+            -t "${IMAGE_URI}:${GITHUB_SHA}" -t "${IMAGE_URI}:latest" .
+          docker push "${IMAGE_URI}:${GITHUB_SHA}"
+          docker push "${IMAGE_URI}:latest"
+          echo "Pushed ${IMAGE_URI}:${GITHUB_SHA}"

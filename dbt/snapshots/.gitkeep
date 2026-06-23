@@ -1,0 +1,2 @@
+# Placeholder so the dbt `snapshot-paths` directory exists.
+# Add SCD-2 snapshots here, e.g. snapshotting `raw.users` to track changes to acquisition attribution.

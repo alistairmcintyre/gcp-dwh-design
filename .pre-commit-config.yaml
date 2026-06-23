@@ -1,0 +1,42 @@
+# Run `uv run pre-commit install` once, then hooks run on every commit.
+# SQLFluff uses the dbt templater, so `uv run dbt deps` must have been run at least once.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-added-large-files
+        args: [--maxkb=2048]
+      - id: check-merge-conflict
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^(scripts|tests)/
+      - id: ruff-format
+        files: ^(scripts|tests)/
+
+  - repo: https://github.com/sqlfluff/sqlfluff
+    rev: 3.3.0
+    hooks:
+      - id: sqlfluff-lint
+        files: ^dbt/models/.*\.sql$
+        additional_dependencies: [dbt-duckdb>=1.10, sqlfluff-templater-dbt>=3.2]
+
+  # dbt metadata checks. These read dbt/target/manifest.json, so run `uv run dbt parse` first.
+  # Kept in the `manual` stage so a stale manifest never blocks a routine commit:
+  #   uv run pre-commit run --hook-stage manual --all-files
+  - repo: https://github.com/dbt-checkpoint/dbt-checkpoint
+    rev: v2.0.6
+    hooks:
+      - id: check-model-has-description
+        stages: [manual]
+        args: [--manifest, dbt/target/manifest.json]
+      - id: check-model-has-tests
+        stages: [manual]
+        args: [--manifest, dbt/target/manifest.json, --test-cnt, "1"]

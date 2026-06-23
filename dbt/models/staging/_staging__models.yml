@@ -1,0 +1,134 @@
+version: 2
+
+models:
+  - name: stg_appsflyer_events
+    description: "Cleaned AppsFlyer events: one row per event, with an `event_date` derived in UTC."
+    columns:
+      - name: event_id
+        description: "Surrogate primary key for the event."
+        data_tests: [unique, not_null]
+      - name: appsflyer_id
+        description: "AppsFlyer device identifier."
+        data_tests: [not_null]
+      - name: user_id
+        description: "Platform user id; null for pre-registration events."
+        data_tests:
+          - relationships:
+              to: ref('stg_users')
+              field: user_id
+      - name: event_name
+        description: "Event type (install, registration, login, first_deposit)."
+        data_tests: [not_null]
+      - name: event_time
+        description: "UTC timestamp the event occurred."
+      - name: event_date
+        description: "UTC calendar date of the event (partition/grain key for acquisition marts)."
+        data_tests: [not_null]
+      - name: media_source
+        description: "Acquisition media source."
+      - name: campaign
+        description: "Marketing campaign name."
+      - name: platform
+        description: "Device platform: ios or android."
+      - name: country
+        description: "ISO country code."
+      - name: attributed_touch_time
+        description: "UTC timestamp of the attributed ad click; null for organic."
+      - name: loaded_at
+        description: "Ingestion timestamp."
+
+  - name: stg_users
+    description: "Cleaned registered users, one row per user."
+    columns:
+      - name: user_id
+        description: "Primary key: platform user id."
+        data_tests: [unique, not_null]
+      - name: appsflyer_id
+        description: "AppsFlyer device id that registered this user."
+      - name: registration_time
+        description: "UTC timestamp the user registered."
+      - name: registration_date
+        description: "UTC calendar date the user registered."
+      - name: country
+        description: "ISO country code."
+      - name: media_source
+        description: "Media source that acquired the user (renamed from acquisition_media_source)."
+        data_tests: [not_null]
+      - name: platform
+        description: "Device platform: ios or android."
+      - name: loaded_at
+        description: "Ingestion timestamp."
+
+  - name: stg_bets
+    description: "Cleaned settled bets, one row per bet, with money columns cast to numeric."
+    columns:
+      - name: bet_id
+        description: "Primary key for the bet."
+        data_tests: [unique, not_null]
+      - name: user_id
+        description: "User who placed the bet."
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_users')
+              field: user_id
+      - name: placed_at
+        description: "UTC timestamp the bet was placed."
+      - name: settled_at
+        description: "UTC timestamp the bet was settled."
+      - name: placed_date
+        description: "UTC calendar date the bet was placed (activity grain key)."
+        data_tests: [not_null]
+      - name: sport
+        description: "Sport/category the bet was on."
+      - name: bet_status
+        description: "Settlement status: won, lost, void, or cashout."
+      - name: stake
+        description: "{{ doc('bet_volume') }}"
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: decimal_odds
+        description: "Decimal odds at which the bet was placed."
+      - name: payout
+        description: "Amount returned to the customer."
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: loaded_at
+        description: "Ingestion timestamp."
+
+  - name: stg_transactions
+    description: "Cleaned wallet transactions, one row per deposit/withdrawal."
+    columns:
+      - name: transaction_id
+        description: "Primary key for the transaction."
+        data_tests: [unique, not_null]
+      - name: user_id
+        description: "User the transaction belongs to."
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_users')
+              field: user_id
+      - name: created_at
+        description: "UTC timestamp the transaction was created."
+      - name: transaction_date
+        description: "UTC calendar date of the transaction (activity grain key)."
+        data_tests: [not_null]
+      - name: transaction_type
+        description: "deposit or withdrawal."
+        data_tests:
+          - accepted_values:
+              values: ["deposit", "withdrawal"]
+      - name: transaction_status
+        description: "completed, pending, or failed."
+      - name: amount
+        description: "Transaction amount (always positive)."
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: loaded_at
+        description: "Ingestion timestamp."

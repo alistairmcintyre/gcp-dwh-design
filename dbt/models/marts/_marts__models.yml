@@ -1,0 +1,122 @@
+version: 2
+
+models:
+  - name: fct_acquisition_events
+    description: >
+      Daily acquisition funnel by acquisition channel and platform: install, registration and
+      first-deposit counts. Incremental (partitioned by `event_date` on BigQuery). Measures are additive;
+      derive conversion rates (registrations / installs) downstream as ratios are not additive.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [event_date, acquisition_channel, platform]
+    columns:
+      - name: event_date
+        description: "UTC calendar date of the events (partition key)."
+        data_type: date
+        constraints: [{ type: not_null }]
+        data_tests: [not_null]
+      - name: acquisition_channel
+        description: "{{ doc('acquisition_channel') }}"
+        data_type: string
+        constraints: [{ type: not_null }]
+        data_tests: [not_null]
+      - name: channel_type
+        description: "Broad channel grouping: Paid Social, Paid Search, Organic, or Other."
+        data_type: string
+      - name: is_paid
+        description: "True when the channel is a paid-media source."
+        data_type: bool
+      - name: platform
+        description: "Device platform: ios or android."
+        data_type: string
+        constraints: [{ type: not_null }]
+        data_tests: [not_null]
+      - name: installs
+        description: "Count of install events."
+        data_type: int64
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: registrations
+        description: "Count of registration events."
+        data_type: int64
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: first_deposits
+        description: "Count of first-deposit events."
+        data_type: int64
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+
+  - name: fct_user_activity
+    description: >
+      Daily per-user activity: bet volume, GGR, deposits and withdrawals, enriched with the user's
+      acquisition channel. Incremental (partitioned by `activity_date`, clustered by acquisition channel
+      on BigQuery); idempotent over the run's data-interval window.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [activity_date, user_id]
+    columns:
+      - name: activity_date
+        description: "UTC date of the user's activity (partition key)."
+        data_type: date
+        constraints: [{ type: not_null }]
+        data_tests: [not_null]
+      - name: user_id
+        description: "Platform user id."
+        data_type: string
+        constraints: [{ type: not_null }]
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_users')
+              field: user_id
+      - name: acquisition_channel
+        description: "{{ doc('acquisition_channel') }}"
+        data_type: string
+      - name: channel_type
+        description: "Broad channel grouping for the user's acquisition source."
+        data_type: string
+      - name: country
+        description: "ISO country code of the user."
+        data_type: string
+      - name: platform
+        description: "Device platform: ios or android."
+        data_type: string
+      - name: bet_count
+        description: "Number of bets placed on the day."
+        data_type: int64
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: total_stake
+        description: "{{ doc('bet_volume') }}"
+        data_type: numeric
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: total_payout
+        description: "Total returned to the user from settled bets on the day."
+        data_type: numeric
+      - name: ggr
+        description: "{{ doc('ggr') }}"
+        data_type: numeric
+      - name: deposit_amount
+        description: "Sum of completed deposits on the day."
+        data_type: numeric
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: withdrawal_amount
+        description: "Sum of completed withdrawals on the day."
+        data_type: numeric
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: net_deposit
+        description: "{{ doc('net_deposit') }}"
+        data_type: numeric

@@ -1,0 +1,24 @@
+version: 2
+
+seeds:
+  - name: dim_channel_grouping
+    description: >
+      Lookup mapping each AppsFlyer `media_source` to a human-friendly acquisition channel and
+      its channel type. Used to roll attribution + activity up to marketing channels.
+    config:
+      column_types:
+        is_paid: boolean
+    columns:
+      - name: media_source
+        description: "Raw AppsFlyer media source identifier (join key to staging events/users)."
+        data_tests:
+          - unique
+          - not_null
+      - name: acquisition_channel
+        description: "Human-friendly acquisition channel name (e.g. 'Facebook Ads')."
+        data_tests:
+          - not_null
+      - name: channel_type
+        description: "Broad channel grouping: Paid Social, Paid Search, or Organic."
+      - name: is_paid
+        description: "True when the channel is a paid-media source (has acquisition cost)."
