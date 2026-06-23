@@ -1,0 +1,26 @@
+# Two targets, one project:
+#   dev  -> DuckDB  (local; source AND destination is data/dev.duckdb)
+#   prod -> BigQuery (Cloud Composer; method: oauth = Application Default Credentials =
+#                     the Composer environment's service account, so no key file is needed)
+dbt_testing:
+  target: "{{ env_var('DBT_TARGET', 'dev') }}"
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('DUCKDB_PATH', 'data/dev.duckdb') }}"
+      schema: main
+      threads: 4
+      # Force UTC so `cast(timestamptz as date)` matches BigQuery's UTC date semantics.
+      settings:
+        TimeZone: "UTC"
+
+    prod:
+      type: bigquery
+      method: oauth
+      project: "{{ env_var('GCP_PROJECT', 'your-gcp-project') }}"
+      dataset: "{{ env_var('BQ_DATASET', 'analytics') }}"
+      location: "{{ env_var('BQ_LOCATION', 'EU') }}"
+      threads: "{{ env_var('BQ_THREADS', '4') | int }}"
+      priority: interactive
+      job_execution_timeout_seconds: 600
+      job_retries: 1

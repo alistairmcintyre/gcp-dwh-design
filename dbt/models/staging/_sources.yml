@@ -1,0 +1,120 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: raw
+    description: >
+      Raw landed data for the demo: AppsFlyer mobile-attribution events plus the betting platform's
+      users, bets, and transactions. Populated by `scripts/generate_test_data.py` (DuckDB locally, or a
+      BigQuery `raw` dataset in Composer). `_loaded_at` is the ingestion timestamp used for freshness.
+    loaded_at_field: _loaded_at
+    freshness:
+      warn_after: { count: 24, period: hour }
+      error_after: { count: 72, period: hour }
+    tables:
+      - name: appsflyer_events
+        description: "One row per AppsFlyer event (install, registration, login, first_deposit)."
+        columns:
+          - name: event_id
+            description: "Surrogate primary key for the event."
+            data_tests: [unique, not_null]
+          - name: appsflyer_id
+            description: "AppsFlyer device identifier; present on every event including pre-registration."
+            data_tests: [not_null]
+          - name: user_id
+            description: "Platform user id; null for pre-registration events (e.g. install)."
+          - name: event_name
+            description: "Event type."
+            data_tests:
+              - accepted_values:
+                  values: ["install", "registration", "login", "first_deposit"]
+          - name: event_time
+            description: "UTC timestamp the event occurred."
+            data_tests: [not_null]
+          - name: media_source
+            description: "Acquisition media source (facebook_ads, google_search_ads, organic, ...)."
+          - name: campaign
+            description: "Marketing campaign name (or 'organic')."
+          - name: platform
+            description: "Device platform: ios or android."
+          - name: country
+            description: "ISO country code of the device."
+          - name: attributed_touch_time
+            description: "UTC timestamp of the attributed ad click; null for organic."
+          - name: _loaded_at
+            description: "Ingestion timestamp (freshness field)."
+
+      - name: users
+        description: "One row per registered user."
+        columns:
+          - name: user_id
+            description: "Primary key: platform user id."
+            data_tests: [unique, not_null]
+          - name: appsflyer_id
+            description: "AppsFlyer device id that registered this user."
+          - name: registration_time
+            description: "UTC timestamp the user registered."
+            data_tests: [not_null]
+          - name: country
+            description: "ISO country code."
+          - name: acquisition_media_source
+            description: "Media source that acquired the user."
+          - name: platform
+            description: "Device platform: ios or android."
+          - name: _loaded_at
+            description: "Ingestion timestamp (freshness field)."
+
+      - name: bets
+        description: "One row per settled sports bet."
+        columns:
+          - name: bet_id
+            description: "Primary key for the bet."
+            data_tests: [unique, not_null]
+          - name: user_id
+            description: "User who placed the bet."
+            data_tests: [not_null]
+          - name: placed_at
+            description: "UTC timestamp the bet was placed."
+            data_tests: [not_null]
+          - name: settled_at
+            description: "UTC timestamp the bet was settled."
+          - name: sport
+            description: "Sport/category the bet was on."
+          - name: stake
+            description: "Amount staked (bet volume contribution), in account currency."
+            data_tests: [not_null]
+          - name: decimal_odds
+            description: "Decimal odds at which the bet was placed."
+          - name: status
+            description: "Settlement status: won, lost, void, or cashout."
+            data_tests:
+              - accepted_values:
+                  values: ["won", "lost", "void", "cashout"]
+          - name: payout
+            description: "Amount returned to the customer (0 for lost; stake for void)."
+          - name: _loaded_at
+            description: "Ingestion timestamp (freshness field)."
+
+      - name: transactions
+        description: "One row per wallet transaction (deposit or withdrawal)."
+        columns:
+          - name: transaction_id
+            description: "Primary key for the transaction."
+            data_tests: [unique, not_null]
+          - name: user_id
+            description: "User the transaction belongs to."
+            data_tests: [not_null]
+          - name: created_at
+            description: "UTC timestamp the transaction was created."
+            data_tests: [not_null]
+          - name: transaction_type
+            description: "deposit or withdrawal."
+            data_tests:
+              - accepted_values:
+                  values: ["deposit", "withdrawal"]
+          - name: amount
+            description: "Transaction amount in account currency (always positive)."
+          - name: status
+            description: "Transaction status: completed, pending, or failed."
+          - name: _loaded_at
+            description: "Ingestion timestamp (freshness field)."

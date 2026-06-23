@@ -1,0 +1,27 @@
+version: 2
+
+models:
+  - name: int_user_daily_activity
+    description: >
+      One row per user per activity date, combining settled-bet aggregates (volume, payout, GGR) with
+      completed wallet transactions (deposits, withdrawals). Ephemeral building block for
+      `fct_user_activity`.
+    columns:
+      - name: user_id
+        description: "Platform user id."
+      - name: activity_date
+        description: "UTC date of activity (bet placed and/or transaction created)."
+      - name: bet_count
+        description: "Number of bets placed on the day."
+      - name: total_stake
+        description: "{{ doc('bet_volume') }}"
+      - name: total_payout
+        description: "Total amount returned to the user from settled bets on the day."
+      - name: ggr
+        description: "{{ doc('ggr') }}"
+      - name: deposit_amount
+        description: "Sum of completed deposits on the day."
+      - name: withdrawal_amount
+        description: "Sum of completed withdrawals on the day."
+      - name: net_deposit
+        description: "{{ doc('net_deposit') }}"

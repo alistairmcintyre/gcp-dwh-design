@@ -1,0 +1,69 @@
+# Build the dbt image and push it to Artifact Registry — keyless, using GitHub OIDC + Google
+# Workload Identity Federation (WIF). No service-account key is ever created or stored. This is the
+# recommended approach (see airflow/README.md "Why WIF" for the rationale).
+#
+# One-time GCP setup (no keys involved):
+#   # 1) Workload Identity Pool + GitHub OIDC provider, restricted to your repo:
+#   gcloud iam workload-identity-pools create github-pool --location=global
+#   gcloud iam workload-identity-pools providers create-oidc github-provider \
+#     --location=global --workload-identity-pool=github-pool \
+#     --issuer-uri="https://token.actions.githubusercontent.com" \
+#     --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository" \
+#     --attribute-condition="assertion.repository=='<org>/<repo>'"
+#   # 2) A deployer SA with only Artifact Registry write:
+#   gcloud iam service-accounts create gha-deployer
+#   gcloud projects add-iam-policy-binding <project> \
+#     --member="serviceAccount:gha-deployer@<project>.iam.gserviceaccount.com" \
+#     --role="roles/artifactregistry.writer"
+#   # 3) Let the GitHub identity impersonate that SA (scoped to the repo only):
+#   gcloud iam service-accounts add-iam-policy-binding gha-deployer@<project>.iam.gserviceaccount.com \
+#     --role="roles/iam.workloadIdentityUser" \
+#     --member="principalSet://iam.googleapis.com/projects/<NUM>/locations/global/workloadIdentityPools/github-pool/attribute.repository/<org>/<repo>"
+#
+# Then set repo variables (non-secret): WIF_PROVIDER (the provider resource name) and WIF_SERVICE_ACCOUNT.
+name: Deploy dbt image (WIF / keyless)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["dbt/**", "airflow/docker/**"]
+
+# OIDC: the runner mints a short-lived identity token; `id-token: write` is required to request it.
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  REGION: europe-west2
+  PROJECT_ID: your-gcp-project
+  REPO: dbt-images
+  IMAGE: dbt
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          # Non-secret identifiers — safe to keep as repo/org variables, not secrets.
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.WIF_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      - name: Build and push
+        run: |
+          IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${IMAGE}"
+          docker build -f airflow/docker/Dockerfile \
+            -t "${IMAGE_URI}:${GITHUB_SHA}" -t "${IMAGE_URI}:latest" .
+          docker push "${IMAGE_URI}:${GITHUB_SHA}"
+          docker push "${IMAGE_URI}:latest"
+          echo "Pushed ${IMAGE_URI}:${GITHUB_SHA}"

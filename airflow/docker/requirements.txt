@@ -1,0 +1,5 @@
+# dbt for the container image (runs via KubernetesPodOperator on Composer; no Airflow here, so this
+# resolves cleanly on a plain python base — none of the airflow<->dbt conflicts).
+dbt-core>=1.10,<1.11
+dbt-bigquery>=1.10,<1.11
+dbt-duckdb>=1.10,<1.11

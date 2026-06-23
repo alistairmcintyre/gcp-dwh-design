@@ -216,3 +216,18 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ---- Project-specific ----
+# Local DuckDB databases (generated test data)
+data/
+*.duckdb
+*.duckdb.wal
+# dbt artefacts
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+logs/
+# dbt local user config
+.user.yml
+# env
+.env

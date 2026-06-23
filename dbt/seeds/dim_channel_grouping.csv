@@ -1,0 +1,6 @@
+media_source,acquisition_channel,channel_type,is_paid
+facebook_ads,Facebook Ads,Paid Social,true
+google_search_ads,Google Search Ads,Paid Search,true
+tiktok_ads,TikTok Ads,Paid Social,true
+apple_search_ads,Apple Search Ads,Paid Search,true
+organic,Organic,Organic,false
