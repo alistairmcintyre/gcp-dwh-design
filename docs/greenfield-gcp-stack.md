@@ -1,7 +1,7 @@
-# Greenfield GCP data stack (2026) — cheat-sheet
+# Greenfield GCP data stack (2026) — design reference
 
-One line per tool: what it is / why. Acronyms expanded. Companion to
-[`../airflow/architecture.md`](../airflow/architecture.md).
+Recommended tooling for a greenfield GCP data platform: one line per tool (what it is / why), with
+acronyms expanded. Companion to [`../airflow/architecture.md`](../airflow/architecture.md).
 
 ## Ingestion
 - **Datastream** — serverless **CDC** (Change Data Capture) that streams row-level DB changes into BigQuery in near-real-time.
