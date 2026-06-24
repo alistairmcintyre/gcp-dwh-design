@@ -1,4 +1,4 @@
-# dbt-testing
+# gcp-dwh-design
 
 A worked, runnable example of orchestrating **dbt** from **Airflow / Cloud Composer**, with **one dbt
 project that runs locally on DuckDB and in production on BigQuery**.
