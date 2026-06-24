@@ -136,8 +136,11 @@ automatically?** **No.**
    so a new SELECT field simply appears — zero schema-evolution code. Best when the table is small enough.
 2. **Keep Terraform owning the table schema** (patch the struct), and have dbt `insert`/`merge` into it. This
    is what you did; it works because TF adds the field first, then dbt writes it.
-3. **dbt `pre_hook`** that patches the schema before the incremental write (a macro calling `bq`/Tables.patch
-   or `ALTER TABLE … ADD COLUMN` where supported), so it's dbt-owned and in version control.
+3. **Schema-patch pre-step in your DAG/CI** — *not* a dbt SQL `pre_hook`: BigQuery has **no DDL** to add a
+   field to an existing STRUCT (`ALTER TABLE ADD COLUMN struct.field` is unsupported; `ALTER COLUMN SET DATA
+   TYPE` only retypes *existing* fields). Add the (nullable) field via `bq update --schema` / `tables.patch`
+   in an Airflow/CI step that runs immediately before the dbt model (idempotent — add only if missing), then
+   dbt inserts.
 4. **`--full-refresh`** the model on the deploy that changes the struct (the `force_full_refresh` var the
    repo already wires supports this).
 
