@@ -1,9 +1,7 @@
 """Import every DAG in a folder via Airflow's DagBag and assert there are no import/cycle errors.
 
-Requires Apache Airflow + the variant's libraries to be installed, so it is skipped automatically in the
-local `dev` venv (no Airflow). In CI it runs once per variant with `DAG_INTEGRITY_DAG_DIR` pointing at that
-variant's DAG folder. For Cosmos folders, generate a dbt manifest first (`dbt deps && dbt parse`) so Cosmos
-parses from the manifest instead of invoking dbt at DAG-parse time.
+Requires Apache Airflow and the providers the DAGs import, so it is skipped automatically in the local
+`dev` venv (no Airflow). In CI, `DAG_INTEGRITY_DAG_DIR` points at the DAG folder to check.
 """
 
 from __future__ import annotations

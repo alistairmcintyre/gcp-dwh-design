@@ -1,11 +1,11 @@
 # Orchestrating dbt on Cloud Composer with KubernetesPodOperator
 
-One approach: dbt lives entirely in a **container image** (Artifact Registry); Airflow just launches pods.
-**Nothing dbt-related is installed on Composer** — only the `cncf.kubernetes` provider it already ships —
-so there's zero Airflow↔dbt dependency-conflict surface.
+dbt lives entirely in a container image (Artifact Registry); Airflow only launches pods. Nothing
+dbt-related is installed on Composer, only the `cncf.kubernetes` provider it already ships, so there is no
+Airflow↔dbt dependency-conflict surface.
 
 ```
- GitHub Actions ──build──▶ Artifact Registry          Cloud Composer (Airflow 2.10)
+ GitHub Actions ──build──▶ Artifact Registry          Cloud Composer (Airflow 3)
    (dbt image)             <region>-docker.pkg.dev      DAG ─▶ dbt_task() ─▶ KubernetesPodOperator
         │                  /<proj>/<repo>/dbt:<sha>                              │ launches pod
         └──────────────────────────────────────────────────────────────────────┘
@@ -33,25 +33,24 @@ Two workflows; both build `airflow/docker/Dockerfile` from the repo root and pus
 Set `REGION` / `PROJECT_ID` / `REPO` in the workflow `env:`. The WIF workflow needs two **non-secret**
 repo variables, `WIF_PROVIDER` and `WIF_SERVICE_ACCOUNT` (one-time GCP setup is in the workflow header).
 
-### Why WIF (keyless) beats a service-account JSON key
+### Why WIF (keyless) rather than a service-account JSON key
 
-A SA key is a **permanent credential**. WIF gives each workflow run a **short-lived, scoped** identity instead:
+An SA key is a permanent credential. WIF gives each workflow run a short-lived, scoped identity instead:
 
-- **No standing secret to leak.** A JSON key works forever until someone notices and rotates it; if it
-  lands in a log, a fork, or a compromised runner, that's a long-lived breach. WIF mints a fresh GitHub
-  OIDC token per run, exchanged (via GCP STS) for an access token that **expires in ~1 hour**. Nothing
-  durable exists to steal.
+- **No standing secret to leak.** A JSON key works until someone notices and rotates it; if it lands in a
+  log, a fork, or a compromised runner, that is a long-lived breach. WIF mints a fresh GitHub OIDC token
+  per run, exchanged via GCP STS for an access token that expires in ~1 hour.
 - **Nothing sensitive stored in GitHub.** Keys live as a GitHub secret (secret sprawl, fork/admin
-  exposure). WIF stores only the provider resource name + SA email — non-secret identifiers.
-- **Least-privilege trust.** The provider's **attribute condition** restricts *which* repo/branch/
-  environment may impersonate the SA (e.g. only `your-org/your-repo`). A stolen key has no such scoping.
+  exposure). WIF stores only the provider resource name and SA email, which are non-secret identifiers.
+- **Least-privilege trust.** The provider's attribute condition restricts which repo/branch/environment
+  may impersonate the SA (e.g. only `your-org/your-repo`). A stolen key has no such scoping.
 - **No rotation, easy revocation.** Nothing to rotate; revoke by removing one IAM binding.
 - **Auditable.** Each token exchange is logged and attributable to a specific GitHub identity.
-- **Policy-friendly.** Many orgs enforce `iam.disableServiceAccountKeyCreation`, so keys aren't even an
-  option. Google's own guidance is: prefer Workload Identity Federation; SA keys are a last resort.
+- **Policy-friendly.** Many orgs enforce `iam.disableServiceAccountKeyCreation`, so keys are not an option.
+  Google's guidance is to prefer Workload Identity Federation and treat SA keys as a last resort.
 
-> Note: this is **deploy-time** auth (GitHub → Artifact Registry). It's separate from **run-time** auth
-> (the pod → BigQuery), covered below — both avoid keys.
+> Note: this is deploy-time auth (GitHub → Artifact Registry), separate from run-time auth (the pod →
+> BigQuery) covered below. Both avoid keys.
 
 ## Deploy to Cloud Composer
 

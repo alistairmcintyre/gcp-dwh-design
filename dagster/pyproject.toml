@@ -1,0 +1,20 @@
+[project]
+name = "dwh_dagster"
+version = "0.1.0"
+description = "Dagster code location orchestrating the gcp-dwh-design dbt project (software-defined assets)"
+requires-python = ">=3.12,<3.13"
+# Runtime deps are pinned in requirements.txt (installed into the Dagster image / a dedicated venv),
+# kept separate from the repo's dbt-only dev group so the two never fight over a shared resolver.
+dependencies = []
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["dwh_dagster"]
+
+# Lets `dagster dev` (run from this folder) discover the code location with no extra flags.
+[tool.dagster]
+module_name = "dwh_dagster.definitions"
+code_location_name = "gcp_dwh"

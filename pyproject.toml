@@ -1,5 +1,5 @@
 [project]
-name = "dbt-testing"
+name = "gcp-dwh-design"
 version = "0.1.0"
 description = "dbt + Airflow/Composer (BigQuery) with a local DuckDB mirror — AppsFlyer / sports-betting demo"
 readme = "README.md"
@@ -7,10 +7,8 @@ requires-python = ">=3.12,<3.13"
 dependencies = []
 
 # The default `dev` group is the local dbt loop (DuckDB) + the data generator + lint/test tooling.
-# Apache Airflow is deliberately NOT installed here: the three orchestration variants need mutually
-# incompatible Airflow versions, so each is installed into its own isolated environment from a
-# requirements file (see airflow/**/requirements*.txt and airflow/cosmos/requirements/). This mirrors
-# how Cloud Composer (PyPI list) and the local Docker image actually install dependencies.
+# Airflow and Dagster are NOT installed here: neither resolves alongside dbt (protobuf 4 vs 5/6), so each
+# gets its own environment from a requirements file (airflow/docker/, dagster/requirements.txt).
 [dependency-groups]
 dev = [
     "dbt-core>=1.10,<1.11",

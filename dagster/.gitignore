@@ -1,0 +1,5 @@
+# Local Dagster instance state (storage, logs, compute logs) when running `dagster dev` from here.
+dagster_home/
+.dagster/
+*.egg-info/
+__pycache__/
