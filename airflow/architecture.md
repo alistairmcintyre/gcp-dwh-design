@@ -1,8 +1,8 @@
 # Data platform architecture — previous → best-practice (GCP)
 
-Visualises a previous production architecture at a sports betting + media company (see `architecture_previous.md` for the raw notes) and a
-best-practice target on GCP. Items the user labelled **before** vs **new** are answered as
-before → best-practice throughout.
+Visualises a previous production architecture at a sports betting + media company (see
+`architecture_previous.md` for the raw notes) and a best-practice target on GCP, contrasting each item as
+before → best-practice.
 
 ---
 
@@ -135,8 +135,8 @@ automatically?** **No.**
 1. **Materialize that model as `table` (full rebuild), not incremental.** The struct is recreated every run,
    so a new SELECT field simply appears — zero schema-evolution code. Best when the table is small enough.
 2. **Keep Terraform owning the table schema** (patch the struct), and have dbt `insert`/`merge` into it. This
-   is what you did; it works because TF adds the field first, then dbt writes it.
-3. **Schema-patch pre-step in your DAG/CI** — *not* a dbt SQL `pre_hook`: BigQuery has **no DDL** to add a
+   works because TF adds the field first, then dbt writes it.
+3. **Schema-patch pre-step in the DAG/CI** — *not* a dbt SQL `pre_hook`: BigQuery has **no DDL** to add a
    field to an existing STRUCT (`ALTER TABLE ADD COLUMN struct.field` is unsupported; `ALTER COLUMN SET DATA
    TYPE` only retypes *existing* fields). Add the (nullable) field via `bq update --schema` / `tables.patch`
    in an Airflow/CI step that runs immediately before the dbt model (idempotent — add only if missing), then
@@ -151,12 +151,16 @@ otherwise option 3 (dbt-owned pre-hook) so schema + transform live together rath
 
 ## 4. Common baseline → best-practice, by concern
 
-### 4.1 Orchestration (is Prefect / Dagster considered?)
+The left-hand column is a typical starting point for a BigQuery + Airflow analytics stack — the shape most
+teams arrive at before a deliberate platform investment. It is a generic industry baseline used as a
+reference point for the comparison, not a description of any particular organisation.
+
+### 4.1 Orchestration (where do Prefect / Dagster fit?)
 | | Detail |
 |---|---|
 | Common baseline | Airflow (Composer) for all batch; BQ SQL insert operators alongside a handful of dbt models |
 | Best practice | **Airflow/Composer** remains the safe GCP-managed default (mature, sensors, huge ecosystem). For a **dbt-centric** stack, **Dagster** is the strongest alternative: software-defined **assets** give a native per-model dbt asset graph + lineage + better local testing (managed via Dagster+ or self-hosted on GKE). **Prefect** is lighter/Pythonic, great for dynamic/ML flows, but weaker on asset/lineage modelling. |
-| Verdict | Stay on Composer if you value managed + existing ops; pick **Dagster** if dbt lineage/asset observability is the priority and you'll run it on GKE/Dagster+. Run dbt via **KubernetesPodOperator + image** (this repo) regardless — keeps dbt off the scheduler. |
+| Verdict | Composer suits teams that value managed infrastructure and existing Airflow ops; **Dagster** wins where dbt lineage and asset observability are the priority and GKE/Dagster+ is acceptable. Run dbt via **KubernetesPodOperator + image** (this repo) either way — it keeps dbt off the scheduler. |
 
 ### 4.2 Governance (AWS Lake Formation → GCP)
 | Lake Formation feature | GCP equivalent (best practice) |
@@ -171,7 +175,7 @@ Pattern: a small **taxonomy of data classes** (e.g. `pii.email`, `pii.name`, `fi
 attach masking policies per role. Tag dbt models via `meta`/`policy_tags` in schema YAML so tags are
 version-controlled and reapplied by dbt/Terraform.
 
-### 4.3 Monitoring / alerting (Teams/Slack on AWS → GCP)
+### 4.3 Monitoring / alerting (chat-based alerting on AWS → GCP)
 | Common baseline | Best practice on GCP |
 |---|---|
 | Slack alerts; metrics + log error counts via Terraform; sensors + source checks so DAGs run only when data ready | **Cloud Monitoring + Cloud Logging**: log-based metrics on error counts; **alerting policies → Slack** (Monitoring Slack channel, or Pub/Sub → Cloud Function/webhook). Keep the **sensor / `dbt source freshness` gating** (it's already best practice). Add **dbt artifacts / Elementary** for test+freshness dashboards and anomaly alerts; SLOs on freshness/latency. Define all of it in Terraform. |
@@ -181,7 +185,7 @@ version-controlled and reapplied by dbt/Terraform.
 |---|---|
 | Custom SQL checks in Airflow tasks | **dbt tests** (generic + `dbt_utils`/`dbt_expectations` + singular), **enforced contracts** on marts, **source freshness**, and **`dbt build`** (test-blocks-downstream). Layer **Elementary** for volume/anomaly monitoring. Gate orchestration on freshness; fail the run on test failure. Keep a few **business-rule singular tests** (e.g. GGR = stake − payout) like this repo has. |
 
-### 4.5 Security (subnet → vulnerability checks)
+### 4.5 Security (network isolation → defence in depth)
 | Common baseline | Best practice |
 |---|---|
 | Workloads in a private subnet behind a NAT gateway | Keep private subnets + Cloud NAT; add **VPC Service Controls** perimeter around BQ/GCS to stop exfiltration; **Private Google Access / Private Service Connect**. **Keyless auth everywhere** — **WIF/OIDC** for CI/CD, **Workload Identity** for workloads (no JSON keys). **Vulnerability checks**: enable **Artifact Registry container scanning** (+ block-on-CVE), add **Trivy/Grype** in CI, **Dependabot/renovate**, and SAST (CodeQL); secrets in **Secret Manager**, secret scanning on. |
@@ -207,8 +211,8 @@ version-controlled and reapplied by dbt/Terraform.
   components, faster plans.
 - **GCS backend with state locking + object versioning** so concurrent `apply` on the *same* state
   serialises (no clobbering) and you can roll back.
-- **Dev concurrency**: engineers clobbering each other's infrastructure comes from sharing one mutable dev environment with **local
-  applies**. Fix with either (a) **per-developer ephemeral stacks** (Terraform workspaces or a
+- **Dev concurrency**: engineers clobbering each other's infrastructure comes from sharing one mutable dev
+  environment with **local applies**. Fix with either (a) **per-developer ephemeral stacks** (Terraform workspaces or a
   `-${var.developer}` suffix / separate sandbox projects), or (b) **a single shared dev where only CI
   applies** (PR plan → merge apply), so applies serialise behind locking. (a) scales better for a team.
 - Structure as reusable **modules** + thin per-env root configs; pin provider versions; `terraform plan` on
@@ -228,8 +232,8 @@ version-controlled and reapplied by dbt/Terraform.
 
 **Streaming (Pub/Sub + Dataflow):**
 - **Pub/Sub** ingress with a **schema** and **dead-letter topics**; **Dataflow** (Apache Beam) for
-  stateful/windowed processing with **exactly-once**, event-time windows + watermarks for out-of-order (your
-  15s-window pattern, done right), and a **DLQ** sink.
+  stateful/windowed processing with **exactly-once**, event-time windows + watermarks for out-of-order (the
+  short-window ordering pattern from §1, done properly), and a **DLQ** sink.
 - Sink to BQ via the **Storage Write API** (not legacy streaming inserts); autoscaling + Streaming Engine.
 - For lighter cases, **Pub/Sub → BigQuery subscription** (no Dataflow) or **Dataflow templates**.
 - Observability: Dataflow job metrics + backlog/watermark alerts; DLQ alerts.
@@ -275,7 +279,7 @@ Fusion.
 | **Dagster + dbt** | software-defined assets, native dbt asset graph + lineage | dbt-centric stack; best lineage/observability (OSS or Dagster+) |
 | **dbt Cloud / platform** | fully managed | want managed + semantic layer + Fusion, least infra |
 
-**Recommendation for you:** you already have a **dbt container image**, so **Cloud Run Jobs** is the lightest
-"better way to implement dbt Core" on GCP — serverless, no GKE, cheap — with **Composer triggering the job**
-(keeping your freshness/sensor gating). Choose **Dagster** instead if asset-level lineage/observability is the
-priority; **dbt Cloud** if you'd rather pay for managed + the semantic layer.
+**Recommendation:** given a dbt container image already exists, **Cloud Run Jobs** is the lightest way to
+run dbt Core on GCP — serverless, no GKE, cheap — with Composer triggering the job to keep freshness and
+sensor gating. **Dagster** instead if asset-level lineage/observability is the priority; **dbt Cloud** if
+managed infrastructure plus the semantic layer is worth the cost.

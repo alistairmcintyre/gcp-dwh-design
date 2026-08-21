@@ -218,6 +218,8 @@ __marimo__/
 .streamlit/secrets.toml
 
 # ---- Project-specific ----
+# JetBrains IDE settings
+.idea/
 # Local DuckDB databases (generated test data)
 data/
 *.duckdb

@@ -1,0 +1,192 @@
+# Two orchestrators, two profiles. Run one at a time:
+#
+#   docker compose --profile dagster up --build     # Dagster UI  -> http://localhost:3000
+#   docker compose --profile airflow up --build      # Airflow 3 UI -> http://localhost:8080 (admin/admin)
+#
+#   docker compose --profile dagster down -v         # stop + wipe that profile's volumes
+#
+# Each profile is self-contained (its own Postgres + storage). Copy .env.example -> .env first;
+# HOST_PROJECT_DIR and DOCKER_GID are needed by the airflow profile.
+name: gcp-dwh-design
+
+# ---------------------------------------------------------------------------------------------------
+# DAGSTER profile: webserver + daemon + Postgres. Runs locally against DuckDB.
+# ---------------------------------------------------------------------------------------------------
+x-dagster-env: &dagster-env
+  DAGSTER_HOME: /opt/dagster/dagster_home
+  DBT_TARGET: dev
+  DUCKDB_PATH: /opt/dagster/data/dev.duckdb
+  DAGSTER_PG_HOST: dagster-postgres
+  DAGSTER_PG_USERNAME: dagster
+  DAGSTER_PG_PASSWORD: dagster
+  DAGSTER_PG_DB: dagster
+  # Optional alerting — leave unset for a quiet demo (sensors self-skip).
+  SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+
+x-dagster-image: &dagster-image
+  build:
+    context: .
+    dockerfile: dagster/Dockerfile
+  image: gcp-dwh-dagster:local
+
+services:
+  dagster-postgres:
+    image: postgres:16
+    profiles: ["dagster"]
+    environment:
+      POSTGRES_USER: dagster
+      POSTGRES_PASSWORD: dagster
+      POSTGRES_DB: dagster
+    volumes:
+      - dagster_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dagster"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  dagster-webserver:
+    <<: *dagster-image
+    profiles: ["dagster"]
+    command: ["dagster-webserver", "-h", "0.0.0.0", "-p", "3000", "-w", "workspace.yaml"]
+    ports:
+      - "3000:3000"
+    environment: *dagster-env
+    volumes:
+      - dagster_data:/opt/dagster/data
+    depends_on:
+      dagster-postgres:
+        condition: service_healthy
+
+  dagster-daemon:
+    <<: *dagster-image
+    profiles: ["dagster"]
+    command: ["dagster-daemon", "run"]
+    environment: *dagster-env
+    volumes:
+      - dagster_data:/opt/dagster/data
+    depends_on:
+      dagster-postgres:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------------------------------
+  # AIRFLOW 3 profile: api-server (UI + Task Execution API) + scheduler + dag-processor + Postgres
+  # (LocalExecutor). dbt runs in a sibling container via DockerOperator, the local mirror of
+  # KubernetesPodOperator on Composer. In Airflow 3 the DAG processor is a separate service and the
+  # webserver is the `api-server`; the Task SDK talks to it over the Execution API.
+  # ---------------------------------------------------------------------------------------------------
+  airflow-postgres:
+    image: postgres:16
+    profiles: ["airflow"]
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Build the dbt runner image (gcp-dwh-dbt:local) on the host so DockerOperator can launch it, then exit.
+  dbt-image:
+    profiles: ["airflow"]
+    build:
+      context: .
+      dockerfile: airflow/docker/Dockerfile
+    image: gcp-dwh-dbt:local
+    command: ["--version"]
+    restart: "no"
+
+  airflow-init:
+    profiles: ["airflow"]
+    build:
+      context: .
+      dockerfile: airflow/docker/Dockerfile.local
+    image: gcp-dwh-airflow:local
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+    environment: &airflow-env
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      # SimpleAuthManager (Airflow 3 default): pin a known admin login instead of a generated password.
+      AIRFLOW__API__EXPOSE_CONFIG: "true"
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: "admin:admin"
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: "false"
+      # A stable JWT secret so tokens minted by the api-server are accepted by workers/scheduler.
+      AIRFLOW__API_AUTH__JWT_SECRET: "local-demo-not-a-secret"
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      DBT_IMAGE: gcp-dwh-dbt:local
+      HOST_PROJECT_DIR: ${HOST_PROJECT_DIR:-}
+    user: "${AIRFLOW_UID:-50000}:0"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/include:/opt/airflow/include
+    entrypoint: /bin/bash
+    # `airflow db migrate` creates/upgrades the metadata DB; SimpleAuthManager needs no user table.
+    command:
+      - -c
+      - airflow db migrate
+    restart: "no"
+
+  airflow-apiserver:
+    profiles: ["airflow"]
+    image: gcp-dwh-airflow:local
+    command: api-server
+    ports:
+      - "8080:8080"
+    environment: *airflow-env
+    user: "${AIRFLOW_UID:-50000}:0"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/include:/opt/airflow/include
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  airflow-scheduler:
+    profiles: ["airflow"]
+    image: gcp-dwh-airflow:local
+    command: scheduler
+    environment: *airflow-env
+    user: "${AIRFLOW_UID:-50000}:0"
+    # Mount the docker socket so DockerOperator (dbt_local_demo) can launch the dbt container.
+    # group_add gives the airflow user access to the socket; set DOCKER_GID in .env (`getent group docker`).
+    group_add:
+      - "${DOCKER_GID:-999}"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/include:/opt/airflow/include
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      airflow-apiserver:
+        condition: service_healthy
+
+  # Airflow 3 parses DAGs in a dedicated process, not inside the scheduler.
+  airflow-dag-processor:
+    profiles: ["airflow"]
+    image: gcp-dwh-airflow:local
+    command: dag-processor
+    environment: *airflow-env
+    user: "${AIRFLOW_UID:-50000}:0"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/include:/opt/airflow/include
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+volumes:
+  dagster_pg:
+  dagster_data:
+  airflow_pg:

@@ -1,0 +1,5 @@
+# How the webserver/daemon load the code location. The module is importable because the image sets
+# PYTHONPATH to the dagster/ folder (and `dagster dev` is run from here locally).
+load_from:
+  - python_module:
+      module_name: dwh_dagster.definitions

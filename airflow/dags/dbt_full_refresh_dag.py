@@ -13,10 +13,10 @@ import os
 import sys
 
 import pendulum
-from airflow import DAG
-from airflow.models.param import Param
+from airflow.sdk import DAG, Param
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "include"))
+from alerts import slack_failure_callback  # noqa: E402
 from dbt_k8s import dbt_task  # noqa: E402
 
 REFRESH_VARS = (
@@ -31,7 +31,11 @@ with DAG(
     start_date=pendulum.datetime(2026, 1, 1, tz="UTC"),
     catchup=False,
     max_active_runs=1,
-    default_args={"retries": 1, "retry_delay": pendulum.duration(minutes=5)},
+    default_args={
+        "retries": 1,
+        "retry_delay": pendulum.duration(minutes=5),
+        "on_failure_callback": slack_failure_callback,  # Slack alert on task failure (incl. dbt test fails)
+    },
     params={
         "full_refresh": Param(True, type="boolean", description="Rebuild marts from scratch."),
         "start_date": Param("1900-01-01", type="string", description="Backfill window start (full_refresh=false)."),

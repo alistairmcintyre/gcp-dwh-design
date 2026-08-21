@@ -1,0 +1,30 @@
+# Dagster instance config (read from $DAGSTER_HOME/dagster.yaml).
+# Postgres-backed run/event/schedule storage so the webserver and daemon share state — the
+# production-shaped setup, and it avoids SQLite multi-process locking between the two containers.
+
+storage:
+  postgres:
+    postgres_db:
+      username:
+        env: DAGSTER_PG_USERNAME
+      password:
+        env: DAGSTER_PG_PASSWORD
+      hostname:
+        env: DAGSTER_PG_HOST
+      db_name:
+        env: DAGSTER_PG_DB
+      port: 5432
+
+# The daemon dequeues runs; max_concurrent_runs=1 keeps DuckDB (single-writer) happy in the local demo.
+run_coordinator:
+  module: dagster.core.run_coordinator
+  class: QueuedRunCoordinator
+  config:
+    max_concurrent_runs: 1
+
+run_launcher:
+  module: dagster
+  class: DefaultRunLauncher
+
+telemetry:
+  enabled: false

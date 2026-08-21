@@ -73,7 +73,7 @@ acronyms expanded. Companion to [`../airflow/architecture.md`](../airflow/archit
 - **Agent Builder + ADK** (Agent Development Kit) — build/deploy/govern production **AI agents** grounded on your data.
 - **Object Tables + multimodal** — BigQuery tables over **unstructured** GCS files (images/PDF/audio) so `AI.GENERATE` / Document AI can analyse them in SQL.
 - **Notebooks** — Colab Enterprise / Vertex Workbench / BigQuery Studio, natively wired to BigQuery for data + AI on one surface.
-- **AI-ready data (the data engineer's job)** — clean, **contracted**, documented dbt marts + a **semantic layer** (consistent metric definitions) + **Dataplex** governance/lineage + PII masking *before* embedding → the trustworthy foundation models and agents consume. "Garbage in → hallucinations out."
+- **AI-ready data (the data engineer's job)** — clean, **contracted**, documented dbt marts + a **semantic layer** (consistent metric definitions) + **Dataplex** governance/lineage + PII masking *before* embedding → the trustworthy foundation models and agents consume.
 
 ---
 

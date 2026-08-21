@@ -1,6 +1,6 @@
-"""AST-compile every DAG / include file (no Airflow needed) to catch syntax errors locally.
+"""AST-compile every orchestration source file (no Airflow/Dagster needed) to catch syntax errors locally.
 
-Run via `make dag-test`. For a full import check (needs Airflow + the variant libs installed), use
+Run via `make dag-test`. For a full import check (needs Airflow installed), use
 `tests/test_dag_integrity.py` in CI instead.
 """
 
@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PY_DIRS = [
     "airflow/include",
     "airflow/dags",
+    "dagster/dwh_dagster",
 ]
 
 
@@ -35,7 +36,7 @@ def main() -> int:
         for e in errors:
             print("  ", e)
         return 1
-    print(f"\n{len(files)} DAG/include files compiled OK")
+    print(f"\n{len(files)} files compiled OK")
     return 0
 
 
