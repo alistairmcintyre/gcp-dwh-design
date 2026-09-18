@@ -274,17 +274,17 @@ module "data_quality" {
     # BRONZE. The most valuable scan in the set, because nothing else is watching this table: dbt
     # source freshness checks its age, but no dbt test runs against raw data before it is modelled.
     # A source that starts emitting nulls or a new country code shows up here first.
-    "bronze-users" = {
+    "bronze-clients" = {
       dataset          = module.bigquery.dataset_ids["raw"]
-      table            = "users"
-      description      = "Bronze landing quality for raw.users -- watches the source contract before any modelling."
+      table            = "clients"
+      description      = "Bronze landing quality for raw.clients -- watches the source contract before any modelling."
       cron             = "0 */6 * * *"
-      non_null_columns = ["user_id", "registration_time", "country"]
-      unique_columns   = ["user_id"]
+      non_null_columns = ["client_id", "registration_time", "country"]
+      unique_columns   = ["client_id"]
       set_rules = [
         {
           column = "country"
-          values = ["GB", "IE", "DE", "ES", "BR"]
+          values = ["GB", "DE", "IE", "ES", "AU", "SG", "US"]
         },
       ]
       freshness = {
@@ -296,15 +296,15 @@ module "data_quality" {
     # GOLD. These duplicate a handful of dbt tests on purpose: dbt proves the table was correct when
     # it was BUILT, this proves it is still correct now. They diverge whenever something writes to
     # the table outside the pipeline, which is exactly the case worth catching.
-    "gold-dim-customer" = {
+    "gold-dim-client" = {
       dataset     = module.bigquery.dataset_ids["marts"]
       table       = "dim_client"
-      description = "Gold customer dimension: key integrity, region validity, and KYC completeness."
+      description = "Gold client dimension: key integrity, region validity, and KYC completeness."
       cron        = "0 7 * * *"
-      # date_of_birth is a KYC identity attribute -- a customer record without one is a compliance
+      # date_of_birth is a KYC identity attribute -- a client record without one is a compliance
       # gap, not just a data gap, so its completeness is monitored rather than merely tested.
       non_null_columns = ["client_id", "trading_region", "date_of_birth"]
-      unique_columns   = ["user_id"]
+      unique_columns   = ["client_id"]
       set_rules = [
         {
           column = "trading_region"
@@ -313,7 +313,7 @@ module "data_quality" {
       ]
       range_rules = [
         {
-          column    = "lifetime_stake"
+          column    = "lifetime_notional"
           min_value = "0"
         },
       ]
@@ -321,12 +321,12 @@ module "data_quality" {
         {
           column      = "date_of_birth"
           expression  = "DATE_DIFF(CURRENT_DATE(), date_of_birth, YEAR) >= 18"
-          description = "every customer is at least 18 -- an underage account is a regulatory breach, not a data defect"
+          description = "every client is at least 18 -- an underage account is a regulatory breach, not a data defect"
         },
       ]
     }
 
-    "gold-fct-user-activity" = {
+    "gold-fct-client-activity" = {
       dataset     = module.bigquery.dataset_ids["marts"]
       table       = "fct_client_activity"
       description = "Gold daily activity fact: grain integrity and money-column sanity on recent partitions."
@@ -334,10 +334,10 @@ module "data_quality" {
       # Scan only the recent partitions. Re-scanning years of immutable history every morning costs
       # real money and can only ever tell you something you already knew.
       row_filter       = "activity_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)"
-      non_null_columns = ["activity_date", "user_id"]
+      non_null_columns = ["activity_date", "client_id"]
       range_rules = [
-        { column = "bet_count", min_value = "0" },
-        { column = "total_stake", min_value = "0" },
+        { column = "trade_count", min_value = "0" },
+        { column = "total_notional", min_value = "0" },
         { column = "deposit_amount", min_value = "0" },
       ]
       row_conditions = [

@@ -47,7 +47,7 @@ variable "source_table" {
 
 variable "entity_id_column" {
   type    = string
-  default = "user_id"
+  default = "client_id"
 }
 
 variable "features" {

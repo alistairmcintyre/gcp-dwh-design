@@ -253,7 +253,7 @@ def main() -> None:
     masking_enabled = tf.get("data_masking_enabled", False)
 
     gold = f"`{project}.{tf['dataset_ids']['marts']}.dim_client`"
-    bronze = f"`{project}.{tf['dataset_ids']['raw']}.users`"
+    bronze = f"`{project}.{tf['dataset_ids']['raw']}.clients`"
 
     print(f"\n{'=' * 92}")
     print(f"  Governance validation -- project {project} ({location})")
@@ -285,7 +285,7 @@ def main() -> None:
         # --- 1. Dataset IAM: Bronze must be unreachable ---------------------------------------
         ok, result = try_query(client, f"select count(*) as n from {bronze}")
         report.check(
-            "Bronze (raw.users) is not readable",
+            "Bronze (raw.clients) is not readable",
             ok == expectation.can_read_bronze,
             f"query {'succeeded' if ok else 'denied'} -- expected "
             f"{'success' if expectation.can_read_bronze else 'denial'}."
