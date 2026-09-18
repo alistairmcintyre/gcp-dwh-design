@@ -44,7 +44,7 @@ managed Composer runtime. See [§ When to pick which](#when-to-pick-which).
    check without failing, matching dbt's semantics.
 3. **Daily partitions drive the incremental window** (`partitions.py`, `dbt_assets.py`). Materialising the
    `2026-06-15` partition runs `dbt build --vars '{"start_date":"2026-06-15","end_date":"2026-06-15"}'`, so
-   the incremental marts rebuild that day only — `insert_overwrite` on BigQuery, `delete+insert` on DuckDB.
+   the incremental marts rebuild that day only: `insert_overwrite` on BigQuery, `delete+insert` on DuckDB.
    Re-runs are idempotent and ranges can be backfilled from the UI.
 4. **`DbtProject` with `prepare_if_dev()`** (`project.py`). Locally the manifest is regenerated on code
    reload; in the image it is baked at build time so the container never shells out to dbt to load
@@ -73,19 +73,19 @@ docker compose --profile dagster up --build       # Dagster UI -> http://localho
 
 Then in the UI:
 
-1. **Assets → View global asset lineage** — the full graph: `raw/*` → `staging` → `marts` → exposures.
+1. **Assets → View global asset lineage**: the full graph, `raw/*` → `staging` → `marts` → exposures.
 2. Click **Materialize all**. The `raw_data` asset generates DuckDB data, then every dbt model builds and
    every dbt test runs as an asset check. The run page shows per-model timing and per-check pass/fail.
-3. Open **`marts/fct_user_activity`** → its **Checks** tab: `not_null`, `relationships`, `dbt_utils`
-   range/expression tests, and the singular `assert_user_activity_ggr_consistent`.
-4. **Assets → fct_user_activity → Materialize → pick a partition** for a partitioned incremental run, or
+3. Open **`marts/fct_client_activity`** → its **Checks** tab: `not_null`, `relationships`, `dbt_utils`
+   range/expression tests, and the singular `assert_user_activity_trading_revenue_consistent`.
+4. **Assets → fct_client_activity → Materialize → pick a partition** for a partitioned incremental run, or
    **Backfill** a date range.
-5. **Automation** tab — `daily_incremental_schedule` / `source_freshness_schedule`; **Sensors** —
+5. **Automation** tab: `daily_incremental_schedule` / `source_freshness_schedule`. **Sensors**:
    `slack_webhook_on_run_failure`.
 
 Stop and wipe: `docker compose --profile dagster down -v`.
 
-> The Airflow UI is a separate profile — `docker compose --profile airflow up --build` (→
+> The Airflow UI is a separate profile: `docker compose --profile airflow up --build` (→
 > http://localhost:8080, `admin`/`admin`). They are not run at the same time; see the root README.
 
 ### Run it without Docker (dev loop)
@@ -103,10 +103,10 @@ uv run --with-requirements dagster/requirements.txt \
 
 Wired in `dwh_dagster/sensors.py`. All sinks are optional and no-op if unconfigured:
 
-- **`SLACK_WEBHOOK_URL`** — always-on run-failure sensor, stdlib only. Posts on any run failure, including
+- **`SLACK_WEBHOOK_URL`**: always-on run-failure sensor, stdlib only. Posts on any run failure, including
   a dbt error-severity test failing the build.
-- **`DAGSTER_SLACK_BOT_TOKEN`** (+ `DAGSTER_SLACK_CHANNEL`) — adds the `dagster-slack` bot sensor.
-- **SMTP** (`DAGSTER_SMTP_HOST`, `DAGSTER_ALERT_EMAIL_FROM/PASSWORD/TO`) — adds an email failure sensor.
+- **`DAGSTER_SLACK_BOT_TOKEN`** (+ `DAGSTER_SLACK_CHANNEL`): adds the `dagster-slack` bot sensor.
+- **SMTP** (`DAGSTER_SMTP_HOST`, `DAGSTER_ALERT_EMAIL_FROM/PASSWORD/TO`): adds an email failure sensor.
 
 How dbt test failures reach the alert: an error-severity test makes `dbt build` exit non-zero, the asset
 step fails, the run fails, and the failure sensors fire. The failed test is also a red asset check on the
@@ -114,7 +114,7 @@ model. Warn-severity tests record a WARN check without failing the run; to alert
 alert policy or an asset-check sensor.
 
 To see an alert fire, point `SLACK_WEBHOOK_URL` at a test webhook and break a test (e.g. loosen the data so
-`assert_user_activity_ggr_consistent` fails), then materialize.
+`assert_user_activity_trading_revenue_consistent` fails), then materialize.
 
 ---
 
@@ -152,7 +152,7 @@ dagster/
     project.py       DbtProject (manifest: prepare_if_dev locally / baked in image) + path/target env
     partitions.py    DailyPartitionsDefinition (the incremental window)
     translator.py    dbt tests -> asset checks; group models by layer
-    dbt_assets.py    @dbt_assets — the dbt project as a partitioned asset graph
+    dbt_assets.py    @dbt_assets, the dbt project as a partitioned asset graph
     raw_data.py      dev-only ingestion asset (runs the generator; emits raw/<table> keys)
     jobs.py          incremental / full-refresh / source-freshness jobs (mirror the Airflow DAGs)
     schedules.py     daily incremental + freshness schedules

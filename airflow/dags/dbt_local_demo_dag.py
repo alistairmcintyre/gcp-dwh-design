@@ -4,7 +4,7 @@ Mirrors the production pattern locally. On Composer, ``KubernetesPodOperator`` l
 pod on GKE; here ``DockerOperator`` launches the same image as a container on local Docker. Either way dbt
 stays out of the Airflow image, since Airflow and dbt cannot co-install (protobuf 4 vs 5/6).
 
-Prereqs (handled by ``docker-compose.yml`` plus a one-time seed — see the root README):
+Prereqs (handled by ``docker-compose.yml`` plus a one-time seed, see the root README):
   * dbt image built:        ``docker build -f airflow/docker/Dockerfile -t gcp-dwh-dbt:local .``
   * DuckDB seeded on host:  ``make data``  (writes ``./data/dev.duckdb``)
   * ``HOST_PROJECT_DIR``=<abs repo path> and the docker socket mounted into the scheduler (compose does this)

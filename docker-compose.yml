@@ -20,7 +20,7 @@ x-dagster-env: &dagster-env
   DAGSTER_PG_USERNAME: dagster
   DAGSTER_PG_PASSWORD: dagster
   DAGSTER_PG_DB: dagster
-  # Optional alerting — leave unset for a quiet demo (sensors self-skip).
+  # Optional alerting. Leave unset for a quiet demo (sensors self-skip).
   SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
 
 x-dagster-image: &dagster-image

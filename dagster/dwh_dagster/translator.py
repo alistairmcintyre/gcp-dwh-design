@@ -5,7 +5,7 @@ pass/fail/warn shows up per-asset in the UI and a failing error-severity test fa
 
 Assets are grouped by their dbt layer (``staging`` / ``intermediate`` / ``marts``).
 
-The default key mapping is kept: dbt sources -> ``AssetKey([source, table])`` (e.g. ``raw/users``),
+The default key mapping is kept: dbt sources -> ``AssetKey([source, table])`` (e.g. ``raw/clients``),
 models -> ``AssetKey([model_name])``. The dev ingestion asset in ``raw_data.py`` emits the same
 ``raw/<table>`` keys, so it becomes the upstream of the dbt sources.
 """

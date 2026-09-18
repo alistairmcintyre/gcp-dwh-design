@@ -1,5 +1,5 @@
 # Dagster instance config (read from $DAGSTER_HOME/dagster.yaml).
-# Postgres-backed run/event/schedule storage so the webserver and daemon share state — the
+# Postgres-backed run/event/schedule storage so the webserver and daemon share state, the
 # production-shaped setup, and it avoids SQLite multi-process locking between the two containers.
 
 storage:

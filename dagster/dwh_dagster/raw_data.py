@@ -5,7 +5,8 @@ BigQuery), so these assets are only included when ``DBT_TARGET == dev`` (see ``d
 the dbt sources appear as external upstream assets instead.
 
 Locally this runs ``scripts/generate_test_data.py`` into the same DuckDB file the dbt ``dev`` target reads
-and emits the asset keys ``raw/appsflyer_events``, ``raw/users``, ``raw/bets``, ``raw/transactions`` —
+and emits the asset keys ``raw/appsflyer_events``, ``raw/clients``,
+``raw/trades``, ``raw/account_transactions``,
 the keys the dbt sources resolve to, which makes the generator the upstream of the dbt graph.
 """
 
@@ -19,13 +20,13 @@ from dagster import AssetExecutionContext, AssetKey, AssetSpec, Config, Material
 REPO_ROOT = Path(__file__).joinpath("..", "..", "..").resolve()
 GENERATOR = REPO_ROOT / "scripts" / "generate_test_data.py"
 
-RAW_TABLES = ["appsflyer_events", "users", "bets", "transactions"]
+RAW_TABLES = ["appsflyer_events", "clients", "trades", "account_transactions"]
 
 
 class RawDataConfig(Config):
     """Knobs for the synthetic generator (editable from the Dagster Launchpad)."""
 
-    users: int = 600
+    clients: int = 600
     days: int = 30
     seed: int = 42
 
@@ -35,7 +36,7 @@ class RawDataConfig(Config):
         AssetSpec(
             key=AssetKey(["raw", table]),
             group_name="raw_ingestion",
-            description=f"Synthetic raw.{table} — dev stand-in for real ingestion (DuckDB).",
+            description=f"Synthetic raw.{table}, dev stand-in for real ingestion (DuckDB).",
         )
         for table in RAW_TABLES
     ],
@@ -47,7 +48,7 @@ def raw_data(context: AssetExecutionContext, config: RawDataConfig):
         sys.executable,
         str(GENERATOR),
         "--target", "duckdb",
-        "--users", str(config.users),
+        "--clients", str(config.clients),
         "--days", str(config.days),
         "--seed", str(config.seed),
     ]

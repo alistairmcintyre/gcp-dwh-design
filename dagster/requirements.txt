@@ -6,7 +6,7 @@ dagster-dbt>=0.26,<0.29
 dagster-postgres>=0.26,<0.29
 dagster-slack>=0.26,<0.29
 
-# dbt — same adapters/version as the production runner image (airflow/docker/requirements.txt).
+# dbt, same adapters and version as the production runner image (airflow/docker/requirements.txt).
 dbt-core>=1.10,<1.11
 dbt-duckdb>=1.10,<1.11
 dbt-bigquery>=1.10,<1.11

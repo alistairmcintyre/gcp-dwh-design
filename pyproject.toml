@@ -1,7 +1,7 @@
 [project]
 name = "gcp-dwh-design"
 version = "0.1.0"
-description = "dbt + Airflow/Composer (BigQuery) with a local DuckDB mirror — AppsFlyer / sports-betting demo"
+description = "dbt + Airflow/Composer (BigQuery) with a local DuckDB mirror, on synthetic trading-platform data"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = []

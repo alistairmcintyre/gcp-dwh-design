@@ -27,8 +27,8 @@ The incremental DAG runs `dbt source freshness` then `dbt build`, passing the ru
 
 Two workflows; both build `airflow/docker/Dockerfile` from the repo root and push to Artifact Registry.
 
-- **`deploy-dbt-image-wif.yml` (recommended, keyless)** — GitHub OIDC + Workload Identity Federation.
-- **`deploy-dbt-image-sa-key.yml` (legacy)** — long-lived SA JSON key in a GitHub secret.
+- **`deploy-dbt-image-wif.yml` (recommended, keyless)**: GitHub OIDC + Workload Identity Federation.
+- **`deploy-dbt-image-sa-key.yml` (legacy)**: long-lived SA JSON key in a GitHub secret.
 
 Set `REGION` / `PROJECT_ID` / `REPO` in the workflow `env:`. The WIF workflow needs two **non-secret**
 repo variables, `WIF_PROVIDER` and `WIF_SERVICE_ACCOUNT` (one-time GCP setup is in the workflow header).
@@ -54,7 +54,7 @@ An SA key is a permanent credential. WIF gives each workflow run a short-lived, 
 
 ## Deploy to Cloud Composer
 
-1. **Provider** — already on Composer; nothing to add to PyPI packages.
+1. **Provider**: already on Composer; nothing to add to PyPI packages.
 2. **Deploy the DAGs + wrapper** to the environment's GCS bucket:
    ```
    gsutil -m rsync -r -d airflow/dags     gs://<composer-bucket>/dags

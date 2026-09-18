@@ -233,3 +233,32 @@ logs/
 .user.yml
 # env
 .env
+
+# ---- Terraform ----
+# Provider plugins and module caches: large, machine-specific, re-fetched by `terraform init`.
+**/.terraform/
+# NOTE: .terraform.lock.hcl is deliberately NOT ignored. It pins provider versions and checksums, so
+# committing it is what makes CI and every engineer resolve the same providers -- the Terraform
+# equivalent of a lockfile, and the difference between "works on my machine" and reproducible.
+
+# State. Never commit it: it holds the full resource graph (and can hold secrets), it conflicts on
+# every concurrent apply, and it has no sensible merge. Real environments use a GCS backend with
+# locking and object versioning -- see terraform/envs/dev/versions.tf.
+*.tfstate
+*.tfstate.*
+*.tfplan
+
+# Local variable overrides. terraform.tfvars IS committed (it documents the dev environment);
+# per-developer overrides are not.
+*.auto.tfvars
+override.tf
+override.tf.json
+
+# ---- Generated / build artefacts ----
+spark/.venv/
+
+# Personal notes, kept out of the repo
+.local/
+
+# Dagster local run storage
+dagster/.dagster_home/

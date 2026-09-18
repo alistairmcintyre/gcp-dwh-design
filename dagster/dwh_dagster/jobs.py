@@ -1,11 +1,11 @@
 """Jobs mirroring the Airflow DAGs, plus source freshness.
 
-* ``incremental_dbt_job`` — daily run (analogue of ``dbt_incremental_dag.py``). Materialises the
+* ``incremental_dbt_job``: daily run (analogue of ``dbt_incremental_dag.py``). Materialises the
   partitioned dbt assets; the schedule launches it for the latest partition each day.
-* ``full_refresh_job`` — manual rebuild / backfill (analogue of ``dbt_full_refresh_dag.py``), driven by
+* ``full_refresh_job``: manual rebuild / backfill (analogue of ``dbt_full_refresh_dag.py``), driven by
   config (``full_refresh`` + ``start_date``/``end_date``) mapping to the marts' ``force_full_refresh`` and
   window vars. Op-based (a single ``dbt build``) so it can rebuild all history in one run.
-* ``source_freshness_job`` — ``dbt source freshness``, the first step of the Airflow incremental DAG.
+* ``source_freshness_job``: ``dbt source freshness``, the first step of the Airflow incremental DAG.
 """
 
 import json
@@ -19,7 +19,7 @@ from .dbt_assets import dwh_dbt_assets
 incremental_dbt_job = define_asset_job(
     name="incremental_dbt_job",
     selection=[dwh_dbt_assets],
-    description="dbt build for one daily partition — idempotent insert_overwrite/delete+insert window.",
+    description="dbt build for one daily partition, idempotent insert_overwrite/delete+insert window.",
 )
 
 
@@ -47,7 +47,7 @@ def dbt_full_refresh_op(context: OpExecutionContext, dbt: DbtCliResource, config
     dbt.cli(["build", "--vars", json.dumps(dbt_vars)], context=context, raise_on_error=True).wait()
 
 
-@job(description="Manual full refresh / backfill — rebuild all history (or a window) in a single run.")
+@job(description="Manual full refresh / backfill, rebuild all history (or a window) in a single run.")
 def full_refresh_job():
     dbt_full_refresh_op()
 

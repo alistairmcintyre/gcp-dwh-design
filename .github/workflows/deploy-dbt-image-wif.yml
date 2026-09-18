@@ -1,4 +1,4 @@
-# Build the dbt image and push it to Artifact Registry — keyless, using GitHub OIDC + Google
+# Build the dbt image and push it to Artifact Registry. Keyless, using GitHub OIDC + Google
 # Workload Identity Federation (WIF). No service-account key is ever created or stored. This is the
 # recommended approach (see airflow/README.md "Why WIF" for the rationale).
 #
@@ -50,7 +50,7 @@ jobs:
         uses: google-github-actions/auth@v2
         with:
           project_id: ${{ env.PROJECT_ID }}
-          # Non-secret identifiers — safe to keep as repo/org variables, not secrets.
+          # Non-secret identifiers, safe to keep as repo/org variables rather than secrets.
           workload_identity_provider: ${{ vars.WIF_PROVIDER }}
           service_account: ${{ vars.WIF_SERVICE_ACCOUNT }}
 

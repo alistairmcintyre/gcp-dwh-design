@@ -4,7 +4,7 @@ Dagster's dbt integration is driven by the dbt manifest (``target/manifest.json`
 the dbt project directory and:
 
 * in local dev (``dagster dev``) regenerates the manifest via ``dbt parse`` on every code reload, so
-  editing a model updates the asset graph — see ``prepare_if_dev()`` below;
+  editing a model updates the asset graph, see ``prepare_if_dev()`` below;
 * in the image the manifest is generated at build time (``dagster/Dockerfile`` runs ``dbt deps &&
   dbt parse``), so the container never shells out to dbt to load definitions.
 

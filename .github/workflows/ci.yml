@@ -21,7 +21,13 @@ jobs:
       - name: Generate raw data
         run: uv run python scripts/generate_test_data.py --users 800 --days 30
       - name: dbt build (DuckDB)
-        run: uv run dbt build --project-dir dbt --profiles-dir dbt --target dev
+        # Rebuild from scratch: the previous step regenerates raw data over a fresh date window, so
+        # an incremental build would carry rows whose user_ids no longer exist upstream. The marts
+        # set `full_refresh=false` in config, which overrides the CLI flag, so the var is required
+        # as well -- the flag alone silently does nothing.
+        run: >
+          uv run dbt build --project-dir dbt --profiles-dir dbt --target dev
+          --full-refresh --vars '{force_full_refresh: true}' 
       - name: Source freshness
         run: uv run dbt source freshness --project-dir dbt --profiles-dir dbt --target dev
       - name: SQLFluff lint
@@ -49,3 +55,79 @@ jobs:
         env:
           DAG_INTEGRITY_DAG_DIR: airflow/dags
         run: pytest tests/test_dag_integrity.py -q
+
+  terraform:
+    name: Terraform fmt + validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+      - name: Format check
+        run: terraform fmt -check -recursive terraform/
+      - name: Validate every module and environment root
+        # `terraform validate` needs an init, but not credentials: -backend=false keeps this
+        # offline, so the check runs on a fork PR with no cloud access.
+        run: |
+          set -euo pipefail
+          for dir in terraform/modules/*/ terraform/envs/*/; do
+            echo "::group::$dir"
+            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" validate
+            echo "::endgroup::"
+          done
+
+  spark:
+    name: Spark framework tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Framework tests (config, transforms, and a real local Spark run)
+        working-directory: spark
+        run: uv run --with "pyspark==3.5.1" --with pyyaml --with pytest python -m pytest tests -q
+      - name: Every job spec parses
+        working-directory: spark
+        run: |
+          set -euo pipefail
+          for f in jobs/*.yaml jobs/generated/*.yaml; do
+            uv run --with pyyaml python -m framework.main --config "$f" --validate-only
+          done
+
+  streaming:
+    name: Kafka topic registry
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Registry is valid and generated jobs are current
+        # Fails if someone edited a generated pipeline by hand or forgot to regenerate after
+        # changing the registry -- the gate that keeps a config-driven estate from becoming N
+        # bespoke ones.
+        run: uv run --with pyyaml python streaming/generate_topic_jobs.py --check
+
+  contracts:
+    name: Data contract compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Contract API + compatibility rules
+        working-directory: services/contract-api
+        run: uv run --with pytest --with pyyaml --with fastapi --with httpx python -m pytest tests -q
+      - name: Every contract still matches its registered version
+        # The gate that turns a directory of YAML into an enforced standard: a breaking change
+        # without a major version bump fails the build.
+        run: uv run --with pyyaml python scripts/validate_contracts.py

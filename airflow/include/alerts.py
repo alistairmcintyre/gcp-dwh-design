@@ -38,5 +38,5 @@ def slack_failure_callback(context: dict) -> None:
     )
     try:
         urllib.request.urlopen(req, timeout=10)  # noqa: S310 (trusted, user-supplied webhook)
-    except Exception:  # noqa: BLE001 — alerting must never fail the callback
+    except Exception:  # noqa: BLE001, alerting must never fail the callback
         pass

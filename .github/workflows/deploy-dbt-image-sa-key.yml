@@ -1,4 +1,4 @@
-# Build the dbt image and push it to Artifact Registry — authenticating with a long-lived
+# Build the dbt image and push it to Artifact Registry, authenticating with a long-lived
 # service-account JSON key stored as a GitHub secret (the "old way"). Kept for reference; prefer the
 # keyless WIF workflow (deploy-dbt-image-wif.yml). See airflow/README.md for why.
 #

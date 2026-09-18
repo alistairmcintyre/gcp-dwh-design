@@ -7,10 +7,10 @@ alert on warns, use an asset-check sensor or a Dagster+ alert policy.
 
 Three sinks, all env-gated so the demo runs with none configured:
 
-* ``slack_webhook_on_run_failure`` — always registered; posts to ``SLACK_WEBHOOK_URL`` via stdlib
+* ``slack_webhook_on_run_failure``: always registered; posts to ``SLACK_WEBHOOK_URL`` via stdlib
   ``urllib`` (no extra dependency).
-* Slack bot token sensor (``dagster-slack``) — added when ``DAGSTER_SLACK_BOT_TOKEN`` is set.
-* Email sensor — added when the SMTP env vars are set.
+* Slack bot token sensor (``dagster-slack``), added when ``DAGSTER_SLACK_BOT_TOKEN`` is set.
+* Email sensor, added when the SMTP env vars are set.
 """
 
 import json
@@ -30,7 +30,7 @@ def _failure_text(context: RunFailureSensorContext) -> str:
     run = context.dagster_run
     error = (context.failure_event.message or "").strip() or "unknown error"
     return (
-        f":red_circle: *Dagster run failed* — job `{run.job_name}`\n"
+        f":red_circle: *Dagster run failed*, job `{run.job_name}`\n"
         f"> {error}\n"
         f"Run ID: `{run.run_id}`"
     )
@@ -44,7 +44,7 @@ def _failure_text(context: RunFailureSensorContext) -> str:
 def slack_webhook_on_run_failure(context: RunFailureSensorContext) -> None:
     webhook = os.getenv("SLACK_WEBHOOK_URL")
     if not webhook:
-        context.log.info("SLACK_WEBHOOK_URL not set — skipping Slack alert.")
+        context.log.info("SLACK_WEBHOOK_URL not set, skipping Slack alert.")
         return
     payload = json.dumps({"text": _failure_text(context)}).encode("utf-8")
     req = urllib.request.Request(
@@ -53,7 +53,7 @@ def slack_webhook_on_run_failure(context: RunFailureSensorContext) -> None:
     try:
         urllib.request.urlopen(req, timeout=10)  # noqa: S310 (trusted, user-supplied webhook)
         context.log.info("Posted failure alert to Slack webhook.")
-    except Exception as exc:  # noqa: BLE001 — alerting must never crash the sensor
+    except Exception as exc:  # noqa: BLE001, alerting must never crash the sensor
         context.log.error(f"Failed to post Slack alert: {exc}")
 
 

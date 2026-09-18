@@ -1,7 +1,7 @@
 """Reusable KubernetesPodOperator wrapper for running dbt commands on Cloud Composer.
 
 dbt lives entirely in the container image (built from ``airflow/docker/Dockerfile`` and pushed to
-Artifact Registry), so **nothing dbt-related is installed on Composer** — only the
+Artifact Registry), so **nothing dbt-related is installed on Composer**: only the
 ``apache-airflow-providers-cncf-kubernetes`` provider, which Composer already ships. Each call to
 ``dbt_task`` launches a pod that runs ``dbt <args>`` against BigQuery.
 
