@@ -42,6 +42,9 @@ env:
 
 jobs:
   build-push:
+    # Skip rather than fail where WIF has not been set up, so a clone of this repo does not show a
+    # red build for infrastructure it was never given.
+    if: vars.WIF_PROVIDER != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

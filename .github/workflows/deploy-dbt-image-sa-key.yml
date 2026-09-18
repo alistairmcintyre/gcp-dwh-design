@@ -6,11 +6,10 @@
 #   GCP_SA_KEY. (Many orgs disable SA-key creation via the iam.disableServiceAccountKeyCreation policy.)
 name: Deploy dbt image (SA key)
 
+# Manual only. It is the legacy path, kept for the comparison in airflow/README.md, and running it
+# on every push just fails for anyone who has not created the key.
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths: ["dbt/**", "airflow/docker/**"]
 
 env:
   REGION: europe-west2
