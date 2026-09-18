@@ -2,7 +2,7 @@
 #   dev  -> DuckDB  (local; source AND destination is data/dev.duckdb)
 #   prod -> BigQuery (Cloud Composer; method: oauth = Application Default Credentials =
 #                     the Composer environment's service account, so no key file is needed)
-dbt_testing:
+dwh:
   target: "{{ env_var('DBT_TARGET', 'dev') }}"
   outputs:
     dev:

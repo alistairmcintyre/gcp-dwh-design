@@ -1,0 +1,49 @@
+version: 2
+
+# Model groups: the ownership boundary in the dbt project.
+#
+# WHY THIS EXISTS. The platform runs a two-tier divisional model -- mature divisions build their own models on
+# the platform, less-mature functions are fully managed by Data Engineering. Both need the SAME
+# guarantee: a division can build freely inside its own domain, and cannot reach past the interface
+# into Data Engineering's internals. Groups plus `access` are how dbt enforces that in CI rather than
+# in a code-review convention.
+#
+# THE RULE, IN ONE LINE:
+#   staging is `private` to `core`  ->  a division physically cannot ref a staging model
+#   core marts are `public`         ->  the conformed interface every domain builds on
+#   domain models are `private`     ->  one division cannot build on another's internals
+#
+# A `ref` that crosses those boundaries fails `dbt parse`. Not a warning -- a parse error. That is
+# the difference between a documented standard and an enforced one.
+groups:
+  - name: core
+    description: >
+      Data-Engineering-owned Core Lake: conformed staging, the intermediate layer, and the conformed
+      dimensions and facts every division builds on. Changes here are contract changes.
+    owner:
+      name: Data Engineering
+      email: data-engineering@example.com
+
+  - name: compliance
+    description: >
+      Compliance domain: client restriction and suppression views, appropriateness and
+      categorisation reporting. Fully managed by Data Engineering today; handover-ready by design.
+    owner:
+      name: Compliance Analytics
+      email: compliance-analytics@example.com
+
+  - name: finance
+    description: >
+      Finance domain: revenue recognition by regulated entity and asset class. Self-serving --
+      Finance owns the models in this folder and Data Engineering owns the interface they read.
+    owner:
+      name: Finance Analytics
+      email: finance-analytics@example.com
+
+  - name: ml
+    description: >
+      Feature engineering for online serving. Separate from the analytics domains because its
+      consumer is a feature store on a latency path, not a BI tool.
+    owner:
+      name: Data Science Platform
+      email: ds-platform@example.com

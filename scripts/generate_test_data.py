@@ -1,11 +1,13 @@
-"""Generate synthetic AppsFlyer + sports-betting raw data.
+"""Generate synthetic AppsFlyer + CFD/spread-betting trading raw data.
 
 Writes four tables into a ``raw`` schema/dataset that the dbt project reads as sources:
 
-    raw.appsflyer_events   mobile-attribution events (install, registration, login, first_deposit)
-    raw.users              registered users
-    raw.bets               settled sports bets
-    raw.transactions       deposits and withdrawals
+    raw.appsflyer_events     mobile-attribution events (install, registration, login, first_deposit)
+    raw.clients              registered clients, with MiFID II categorisation and account status
+    raw.orders               client instructions (market / limit / stop)
+    raw.trades               executions against those orders -- an order fills in 0..n trades
+    raw.quotes               sampled bid/ask ticks per instrument
+    raw.account_transactions client-money deposits and withdrawals
 
 Locally the destination is a DuckDB file (``--target duckdb``, the default); for the BigQuery flow
 (``--target bigquery``) the same frames are loaded into a BigQuery dataset using Application Default
@@ -15,7 +17,7 @@ which lets the incremental dbt models be exercised for idempotency.
 Examples
 --------
     python scripts/generate_test_data.py                       # -> data/dev.duckdb
-    python scripts/generate_test_data.py --users 5000 --days 120
+    python scripts/generate_test_data.py --clients 5000 --days 120
     python scripts/generate_test_data.py --target bigquery --gcp-project my-proj --bq-raw-dataset raw
 """
 
@@ -48,11 +50,56 @@ REG_RATE = {
     "organic": 0.70,
 }
 PLATFORMS = {"ios": 0.45, "android": 0.55}
-COUNTRIES = {"GB": 0.40, "IE": 0.12, "DE": 0.18, "ES": 0.15, "BR": 0.15}
-SPORTS = {"football": 0.50, "tennis": 0.15, "basketball": 0.15, "horse_racing": 0.12, "esports": 0.08}
+COUNTRIES = {"GB": 0.38, "DE": 0.14, "IE": 0.08, "ES": 0.08, "AU": 0.12, "SG": 0.08, "US": 0.12}
+# Tradable instruments, keyed by a short instrument code.
+#   instrument_id -> (instrument_name, asset_class, reference_price, spread_bps, annual_funding_rate)
+MARKETS = {
+    "EURUSD": ("EUR/USD",     "FX",              1.08,   0.6,  0.045),
+    "GBPUSD": ("GBP/USD",     "FX",              1.27,   0.9,  0.048),
+    "USDJPY": ("USD/JPY",     "FX",            157.40,   0.7,  0.030),
+    "UK100":  ("FTSE 100",    "INDICES",      8200.0,    1.0,  0.052),
+    "US500":  ("S&P 500",     "INDICES",      5600.0,    0.5,  0.055),
+    "DE40":   ("DAX 40",      "INDICES",     18500.0,    1.2,  0.040),
+    "XAUUSD": ("Gold",        "COMMODITIES",  2400.0,    3.0,  0.050),
+    "BRENT":  ("Brent Crude", "COMMODITIES",    82.0,    2.8,  0.050),
+    "AAPL":   ("Apple Inc",   "SHARES",        225.0,    8.0,  0.058),
+    "TSLA":   ("Tesla Inc",   "SHARES",        250.0,   12.0,  0.058),
+    "BTCUSD": ("Bitcoin",     "CRYPTO",      65000.0,   30.0,  0.090),
+}
+INSTRUMENTS = list(MARKETS)
+INSTRUMENT_WEIGHTS = {i: w for i, w in zip(
+    INSTRUMENTS, [0.16, 0.10, 0.07, 0.13, 0.14, 0.07, 0.08, 0.06, 0.07, 0.06, 0.06])}
+PRODUCT_TYPES = {"CFD": 0.62, "SPREAD_BET": 0.38}
+ORDER_TYPES = {"MARKET": 0.58, "LIMIT": 0.27, "STOP": 0.15}
+# MiFID II categorisation. Professionals are a small minority but trade much larger.
+CLIENT_CATEGORIES = {"RETAIL": 0.93, "PROFESSIONAL": 0.05, "ELECTIVE_PROFESSIONAL": 0.02}
+# Account lifecycle. RESTRICTED/SUSPENDED carry a reason that must suppress marketing downstream.
+STATUS_REASONS = {
+    "RESTRICTED": ["APPROPRIATENESS_FAILED", "KYC_EXPIRED", "NEGATIVE_BALANCE"],
+    "SUSPENDED": ["VULNERABLE_CLIENT", "KYC_EXPIRED"],
+    "CLOSED": ["CLIENT_REQUEST", "VULNERABLE_CLIENT"],
+}
 CAMPAIGNS = ["brand_generic", "acq_prospecting", "retargeting", "lookalike_2pct", "seasonal_promo"]
 
-HOUSE_MARGIN = 0.92  # actual win prob = implied prob * margin (the operator's edge)
+# The platform does not profit from client losses -- it profits from the dealing spread, commission on share
+# CFDs, and overnight funding. Client P&L is modelled independently of platform revenue for exactly that
+# reason, and the two are reconciled by a singular dbt test.
+COMMISSION_BPS_SHARES = 10.0  # share CFDs carry explicit commission; other markets do not
+
+# Synthetic personal data. These four columns exist purely to demonstrate BigQuery column-level
+# security: they carry Dataplex policy tags (see terraform/modules/governance) and are masked at query
+# time for principals holding only the Masked Reader role. Nothing here is real personal data --
+# the pools are small and deliberately obviously fake.
+FIRST_NAMES = [
+    "Amelia", "Oliver", "Isla", "Noah", "Ava", "Leo", "Freya", "Arthur", "Sofia", "Jack",
+    "Mia", "Ethan", "Lily", "Mateo", "Clara", "Hugo", "Nora", "Liam", "Elena", "Finn",
+]
+LAST_NAMES = [
+    "Okafor", "Mccarthy", "Nowak", "Silva", "Fischer", "Duarte", "Kaur", "Novak", "Moreau", "Rossi",
+    "Andersen", "Petrov", "Garcia", "Hoffmann", "Murphy", "Lindqvist", "Costa", "Weber", "Nagy", "Reyes",
+]
+EMAIL_DOMAINS = ["example.com", "example.net", "example.org"]
+
 
 
 def _choice(rng: np.random.Generator, mapping: dict[str, float], size: int) -> np.ndarray:
@@ -104,9 +151,9 @@ def build_frames(
     reg_delay = rng.integers(120, 3 * 24 * 3600, n_devices)  # 2 min .. 3 days
     reg_s = install_s + reg_delay
     reg_s = np.where(reg_s < end_s, reg_s, end_s - 1)
-    user_id = np.where(registered, np.array([f"usr-{i:08d}" for i in device_idx]), None)
+    client_id = np.where(registered, np.array([f"cli-{i:08d}" for i in device_idx]), None)
 
-    # active = registered users who go on to deposit + bet
+    # active = registered clients who go on to deposit + trade
     active = registered & (rng.random(n_devices) < 0.75)
 
     # ---- appsflyer_events ---------------------------------------------------
@@ -119,7 +166,7 @@ def build_frames(
         return pd.DataFrame(
             {
                 "appsflyer_id": appsflyer_id[idx],
-                "user_id": (user_id[idx] if with_user else np.full(idx.size, None)),
+                "client_id": (client_id[idx] if with_user else np.full(idx.size, None)),
                 "event_name": name,
                 "event_time": _to_ts(time_s[idx]),
                 "media_source": media_source[idx],
@@ -145,7 +192,7 @@ def build_frames(
             pd.DataFrame(
                 {
                     "appsflyer_id": appsflyer_id[owner],
-                    "user_id": user_id[owner],
+                    "client_id": client_id[owner],
                     "event_name": "login",
                     "event_time": _to_ts(login_s),
                     "media_source": media_source[owner],
@@ -166,56 +213,222 @@ def build_frames(
     events["_loaded_at"] = loaded_at
 
     # ---- users --------------------------------------------------------------
+    # first_name / last_name / date_of_birth / email are the PII columns the column-level security
+    # demo masks. They are generated here rather than in dbt so the raw (Bronze) layer holds the
+    # unmasked values and every downstream layer inherits the policy tags from the schema YAML.
     reg_idx = np.where(registered)[0]
+    n_users = reg_idx.size
+    first_name = rng.choice(FIRST_NAMES, size=n_users)
+    last_name = rng.choice(LAST_NAMES, size=n_users)
+    # Adults only: uniform ages 18-75 at the end of the window, to the day.
+    age_days = rng.integers(18 * 365, 75 * 365, n_users)
+    date_of_birth = (pd.Timestamp(end).normalize().tz_localize(None) - pd.to_timedelta(age_days, unit="D")).date
+    email = pd.Series(
+        [
+            f"{f}.{l}.{u.split('-')[1]}@{d}".lower()
+            for f, l, u, d in zip(
+                first_name, last_name, client_id[reg_idx], rng.choice(EMAIL_DOMAINS, size=n_users)
+            )
+        ]
+    )
+    # MiFID II categorisation and account lifecycle. `account_status_reason` is the attribute that
+    # has to reach marketing suppression fast: a VULNERABLE_CLIENT or APPROPRIATENESS_FAILED client
+    # still sitting in an audience is a regulatory breach, not a data-quality issue.
+    client_category = _choice(rng, CLIENT_CATEGORIES, n_users)
+    status_roll = rng.random(n_users)
+    account_status = np.where(
+        status_roll < 0.885, "ACTIVE",
+        np.where(status_roll < 0.925, "DORMANT",
+        np.where(status_roll < 0.960, "RESTRICTED",
+        np.where(status_roll < 0.983, "SUSPENDED", "CLOSED"))),
+    )
+    reason = np.full(n_users, None, dtype=object)
+    for state, options in STATUS_REASONS.items():
+        mask = account_status == state
+        if mask.any():
+            reason[mask] = rng.choice(options, size=int(mask.sum()))
+
     users = pd.DataFrame(
         {
-            "user_id": user_id[reg_idx],
+            "client_id": client_id[reg_idx],
             "appsflyer_id": appsflyer_id[reg_idx],
+            "first_name": first_name,
+            "last_name": last_name,
+            "date_of_birth": date_of_birth,
+            "email": email,
             "registration_time": _to_ts(reg_s[reg_idx]),
             "country": country[reg_idx],
+            "client_category": client_category,
+            "account_status": account_status,
+            "account_status_reason": reason,
             "acquisition_media_source": media_source[reg_idx],
             "platform": platform[reg_idx],
             "_loaded_at": loaded_at,
         }
     )
 
-    # ---- bets (active users only) ------------------------------------------
+    # ---- trades (active clients only) ---------------------------------------
+    # A trade is a position opened on a market and later closed. the platform's revenue is the dealing spread
+    # plus commission (share CFDs only) plus overnight funding -- NOT the client's loss, which is
+    # modelled independently as `client_pnl`.
     active_idx = np.where(active)[0]
-    bet_counts = rng.poisson(14, active_idx.size) + 1
-    owner = np.repeat(active_idx, bet_counts)
-    n_bets = owner.size
-    placed_s = _rand_times(rng, reg_s[owner].astype("int64") + 3600, end_s, n_bets)
-    stake = np.round(np.clip(rng.gamma(2.0, 9.0, n_bets), 1.0, 1000.0), 2)
-    odds = np.round(np.clip(1.1 + rng.exponential(1.3, n_bets), 1.05, 26.0), 2)
-    implied = 1.0 / odds
-    win = rng.random(n_bets) < implied * HOUSE_MARGIN
-    roll = rng.random(n_bets)
-    status = np.where(roll < 0.02, "void", np.where(roll < 0.07, "cashout", np.where(win, "won", "lost")))
-    payout = np.zeros(n_bets)
-    payout = np.where(status == "won", np.round(stake * odds, 2), payout)
-    payout = np.where(status == "void", stake, payout)
-    cashout_mask = status == "cashout"
-    payout = np.where(
-        cashout_mask, np.round(stake * rng.uniform(0.4, 1.0, n_bets) * odds * 0.6, 2), payout
+    trade_counts = rng.poisson(14, active_idx.size) + 1
+    owner = np.repeat(active_idx, trade_counts)
+    n_trades = owner.size
+
+    instrument_id = _choice(rng, INSTRUMENT_WEIGHTS, n_trades)
+    market_name = np.array([MARKETS[e][0] for e in instrument_id])
+    asset_class = np.array([MARKETS[e][1] for e in instrument_id])
+    ref_price = np.array([MARKETS[e][2] for e in instrument_id])
+    spread_bps = np.array([MARKETS[e][3] for e in instrument_id])
+    funding_rate = np.array([MARKETS[e][4] for e in instrument_id])
+
+    product_type = _choice(rng, PRODUCT_TYPES, n_trades)
+    direction = np.where(rng.random(n_trades) < 0.54, "BUY", "SELL")
+    sign = np.where(direction == "BUY", 1.0, -1.0)
+
+    opened_s = _rand_times(rng, reg_s[owner].astype("int64") + 3600, end_s, n_trades)
+    hold_s = rng.integers(300, 12 * 24 * 3600, n_trades)
+    closed_s = np.minimum(opened_s + hold_s, end_s)
+    days_held = np.maximum((closed_s - opened_s) / 86400.0, 0.0)
+
+    # Opening price jitters around the market reference; the close is a short random walk from it.
+    opening_price = np.round(ref_price * (1.0 + rng.normal(0.0, 0.012, n_trades)), 5)
+    move_pct = rng.normal(0.0, 0.010, n_trades) + rng.standard_t(3, n_trades) * 0.004
+    closing_price = np.round(opening_price * (1.0 + move_pct), 5)
+
+    # Trade size: contracts for a CFD, stake per point for a spread bet. Professionals trade larger.
+    is_pro = np.isin(client_category[np.searchsorted(reg_idx, owner)], ["PROFESSIONAL", "ELECTIVE_PROFESSIONAL"])
+    size_scale = np.where(is_pro, 6.0, 1.0)
+    quantity = np.round(np.clip(rng.gamma(1.8, 1.4, n_trades) * size_scale, 0.1, 400.0), 2)
+
+    notional_value = np.round(quantity * opening_price, 2)
+    client_pnl = np.round((closing_price - opening_price) * quantity * sign, 2)
+
+    # platform revenue components.
+    spread_revenue = np.round(notional_value * spread_bps / 10000.0, 2)
+    commission = np.round(
+        np.where(asset_class == "SHARES", notional_value * COMMISSION_BPS_SHARES / 10000.0, 0.0), 2
     )
-    settle_delay = rng.integers(300, 3 * 24 * 3600, n_bets)
-    settled_s = np.minimum(placed_s + settle_delay, end_s)
-    bets = pd.DataFrame(
+    funding_charge = np.round(notional_value * funding_rate / 365.0 * days_held, 2)
+
+    currency = np.where(country[owner] == "US", "USD",
+               np.where(country[owner] == "GB", "GBP",
+               np.where(country[owner] == "AU", "AUD",
+               np.where(country[owner] == "SG", "SGD", "EUR"))))
+
+    roll = rng.random(n_trades)
+    status = np.where(roll < 0.015, "CANCELLED",
+             np.where(roll < 0.085, "STOPPED_OUT",
+             np.where(roll < 0.125, "OPEN",
+             np.where(roll < 0.175, "PART_CLOSED", "CLOSED"))))
+
+    # A stop-out closes at a loss by construction.
+    stopped = status == "STOPPED_OUT"
+    client_pnl = np.where(stopped, -np.abs(client_pnl) - np.round(quantity * opening_price * 0.004, 2), client_pnl)
+    closing_price = np.where(stopped, np.round(opening_price * (1.0 - 0.004 * sign * np.sign(sign)), 5), closing_price)
+
+    # A cancelled trade never reached the market: no price, no P&L, no revenue.
+    cancelled = status == "CANCELLED"
+    still_open = status == "OPEN"
+    no_close = cancelled | still_open
+    client_pnl = np.where(cancelled, 0.0, client_pnl)
+    spread_revenue = np.where(cancelled, 0.0, spread_revenue)
+    commission = np.where(cancelled, 0.0, commission)
+    funding_charge = np.where(cancelled, 0.0, funding_charge)
+
+    closed_ts = _to_ts(closed_s)
+    trades = pd.DataFrame(
         {
-            "bet_id": [f"bet-{i:09d}" for i in range(n_bets)],
-            "user_id": user_id[owner],
-            "placed_at": _to_ts(placed_s),
-            "settled_at": _to_ts(settled_s),
-            "sport": _choice(rng, SPORTS, n_bets),
-            "stake": stake,
-            "decimal_odds": odds,
+            "trade_id": [f"TRD{i:012d}" for i in range(n_trades)],
+            "order_id": [f"ORD{i:012d}" for i in range(n_trades)],
+            "client_id": client_id[owner],
+            "instrument_id": instrument_id,
+            "market_name": market_name,
+            "asset_class": asset_class,
+            "product_type": product_type,
+            "direction": direction,
+            "opened_at": _to_ts(opened_s),
+            "closed_at": closed_ts.where(~pd.Series(no_close), other=pd.NaT),
             "status": status,
-            "payout": np.round(payout, 2),
+            "currency": currency,
+            "quantity": quantity,
+            "opening_price": opening_price,
+            "closing_price": pd.Series(closing_price).where(~pd.Series(no_close), other=np.nan),
+            "notional_value": notional_value,
+            "client_pnl": np.round(client_pnl, 2),
+            "spread_revenue": np.round(spread_revenue, 2),
+            "commission": np.round(commission, 2),
+            "funding_charge": np.round(funding_charge, 2),
             "_loaded_at": loaded_at,
         }
     )
 
-    # ---- transactions (active users only) ----------------------------------
+    # ---- orders (the instruction) -------------------------------------------
+    # An order is what the client asked for; a trade is what the market gave them. They are separate
+    # entities because the relationship is 1:0..n -- a working order may never fill, and a large one
+    # commonly fills in several pieces at different prices. Collapsing them into one row is the
+    # classic modelling error here: it makes partial fills invisible and average execution price
+    # impossible to compute honestly.
+    order_type = _choice(rng, ORDER_TYPES, n_trades)
+    order_roll = rng.random(n_trades)
+    order_status = np.where(order_roll < 0.03, "REJECTED",
+                   np.where(order_roll < 0.09, "CANCELLED",
+                   np.where(order_roll < 0.14, "WORKING",
+                   np.where(order_roll < 0.30, "PART_FILLED", "FILLED"))))
+    # A market order is never left working; it fills or it is rejected.
+    order_status = np.where((order_type == "MARKET") & (order_status == "WORKING"), "FILLED", order_status)
+    placed_s = opened_s - rng.integers(1, 900, n_trades)
+
+    orders = pd.DataFrame(
+        {
+            "order_id": [f"ORD{i:012d}" for i in range(n_trades)],
+            "client_id": client_id[owner],
+            "instrument_id": instrument_id,
+            "side": direction,
+            "order_type": order_type,
+            "quantity": quantity,
+            "limit_price": np.where(order_type == "LIMIT", np.round(opening_price * 0.998, 5), np.nan),
+            "stop_price": np.where(order_type == "STOP", np.round(opening_price * 1.002, 5), np.nan),
+            "status": order_status,
+            "placed_at": _to_ts(placed_s),
+            "currency": currency,
+            "_loaded_at": loaded_at,
+        }
+    )
+
+    # An order that never reached the market has no executions behind it. Dropping those trades here
+    # is what makes the order:trade relationship 1:0..n rather than a disguised 1:1 -- and it is what
+    # the `assert_cancelled_orders_have_no_trades` test exists to protect.
+    executed = np.isin(order_status, ["FILLED", "PART_FILLED"])
+    trades = trades.loc[executed].reset_index(drop=True)
+
+    # ---- quotes (market data) -----------------------------------------------
+    # Sampled, not tick-for-tick: the full feed belongs on the trading platform, not the warehouse.
+    # Retained for execution-quality analysis -- comparing fill price against the prevailing quote is
+    # how you evidence best execution, which is a regulatory obligation rather than an analytics nicety.
+    n_quote_days = (end_s - start_s) // 86400 + 1
+    quote_rows = []
+    for e, (_name, _ac, ref, spread_bps, _fund) in MARKETS.items():
+        ticks = int(n_quote_days) * 24
+        ts = start_s + rng.integers(0, max(end_s - start_s, 1), ticks)
+        mid = ref * (1.0 + rng.normal(0.0, 0.006, ticks))
+        half = mid * (spread_bps / 10000.0) / 2.0
+        quote_rows.append(
+            pd.DataFrame(
+                {
+                    "instrument_id": e,
+                    "quote_time": _to_ts(np.sort(ts)),
+                    "bid": np.round(mid - half, 5),
+                    "ask": np.round(mid + half, 5),
+                    "mid": np.round(mid, 5),
+                }
+            )
+        )
+    quotes = pd.concat(quote_rows, ignore_index=True)
+    quotes["_loaded_at"] = loaded_at
+
+    # ---- client-money transactions (active clients only) --------------------
     dep_counts = rng.poisson(2, active_idx.size) + 1
     wd_counts = rng.poisson(0.8, active_idx.size)
     dep_owner = np.repeat(active_idx, dep_counts)
@@ -224,9 +437,10 @@ def build_frames(
     wd_s = _rand_times(rng, reg_s[wd_owner].astype("int64") + 3600, end_s, wd_owner.size)
     dep_amt = np.round(np.clip(rng.gamma(2.2, 22.0, dep_owner.size), 5.0, 2000.0), 2)
     wd_amt = np.round(np.clip(rng.gamma(2.0, 30.0, wd_owner.size), 5.0, 3000.0), 2)
+    tx_owner = np.concatenate([dep_owner, wd_owner])
     tx = pd.DataFrame(
         {
-            "user_id": np.concatenate([user_id[dep_owner], user_id[wd_owner]]),
+            "client_id": np.concatenate([client_id[dep_owner], client_id[wd_owner]]),
             "created_at": _to_ts(np.concatenate([dep_s, wd_s])),
             "transaction_type": (["deposit"] * dep_owner.size) + (["withdrawal"] * wd_owner.size),
             "amount": np.concatenate([dep_amt, wd_amt]),
@@ -234,11 +448,22 @@ def build_frames(
     )
     status_roll = rng.random(len(tx))
     tx["status"] = np.where(status_roll < 0.94, "completed", np.where(status_roll < 0.98, "pending", "failed"))
+    tx["currency"] = np.where(country[tx_owner] == "US", "USD",
+                      np.where(country[tx_owner] == "GB", "GBP",
+                      np.where(country[tx_owner] == "AU", "AUD",
+                      np.where(country[tx_owner] == "SG", "SGD", "EUR"))))
     tx = tx.sort_values("created_at").reset_index(drop=True)
     tx.insert(0, "transaction_id", [f"txn-{i:09d}" for i in range(len(tx))])
     tx["_loaded_at"] = loaded_at
 
-    return {"appsflyer_events": events, "users": users, "bets": bets, "transactions": tx}
+    return {
+        "appsflyer_events": events,
+        "clients": users,
+        "orders": orders,
+        "trades": trades,
+        "quotes": quotes,
+        "account_transactions": tx,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -278,7 +503,7 @@ def write_bigquery(frames: dict[str, pd.DataFrame], project: str, dataset: str, 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--target", choices=["duckdb", "bigquery"], default="duckdb")
-    p.add_argument("--users", type=int, default=2500, help="number of installs/devices to generate")
+    p.add_argument("--clients", type=int, default=2500, help="number of installs/devices to generate")
     p.add_argument("--days", type=int, default=90, help="history length ending at --end")
     p.add_argument("--end", default=None, help="ISO end date (default: now, UTC)")
     p.add_argument("--seed", type=int, default=42)
@@ -298,7 +523,7 @@ def main() -> None:
     )
     start = end - timedelta(days=args.days)
 
-    frames = build_frames(args.users, start, end, args.seed)
+    frames = build_frames(args.clients, start, end, args.seed)
     rows = {k: len(v) for k, v in frames.items()}
 
     if args.target == "duckdb":

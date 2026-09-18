@@ -1,0 +1,116 @@
+# Data contract: marts.dim_client
+#
+# The governed client dimension. The interesting part of this contract is `classification`: it is
+# what causes column-level security to be applied, so this file is a security artefact as much as a
+# documentation one.
+apiVersion: v1
+kind: DataContract
+id: marts.dim_client
+version: 1.0.0
+
+owner:
+  team: data-engineering
+  steward: principal-data-engineer
+  slack: "#data-engineering"
+
+description: >
+  One row per registered client: KYC/PII attributes, MiFID II categorisation, account status and
+  lifetime value measures. Access is
+  restricted by row (trading_region) and by column (policy tags). See docs/governance.md.
+
+grain:
+  columns: [client_id]
+  uniqueness: enforced
+
+schema:
+  - name: client_id
+    type: STRING
+    required: true
+    description: Platform client id. Pseudonymous.
+  - name: first_name
+    type: STRING
+    required: false
+    description: Client given name.
+    pii_class: person_name
+  - name: last_name
+    type: STRING
+    required: false
+    description: Client family name.
+    pii_class: person_name
+  - name: date_of_birth
+    type: DATE
+    required: false
+    description: Client date of birth. A KYC identity attribute.
+    pii_class: date_of_birth
+  - name: email
+    type: STRING
+    required: false
+    description: Client email address.
+    pii_class: contact
+  - name: trading_region
+    type: STRING
+    required: true
+    description: >
+      Regulated entity owning the client relationship: UK (FCA), EMEA (BaFin), APAC (ASIC / MAS),
+      US (SEC / CFTC), OTHER. This is the row access policy key --
+      changing how it is derived changes who can see which clients.
+  - name: client_category
+    type: STRING
+    required: true
+    description: >
+      MiFID II categorisation (RETAIL / PROFESSIONAL / ELECTIVE_PROFESSIONAL). A regulatory
+      attribute: it determines leverage caps and negative balance protection.
+  - name: account_status
+    type: STRING
+    required: true
+    description: ACTIVE / RESTRICTED / SUSPENDED / DORMANT / CLOSED.
+  - name: account_status_reason
+    type: STRING
+    required: false
+    description: >
+      Cause of a non-ACTIVE status. VULNERABLE_CLIENT and APPROPRIATENESS_FAILED must suppress
+      marketing downstream, which is why the source topic carries a 5-minute freshness SLO.
+  - name: lifetime_trading_revenue
+    type: NUMERIC
+    required: false
+    description: >
+      platform revenue across all history: dealing spread + commission + overnight funding. NOT the
+      client's loss, which is carried separately as lifetime_client_pnl.
+
+guarantees:
+  - client_id is unique and non-null
+  - trading_region is non-null and one of [UK, EMEA, APAC, US, OTHER]
+  - every client is at least 18 years old at date_of_birth
+  - lifetime_trading_revenue equals the sum of spread, commission and funding components
+
+slo:
+  freshness:
+    target: rebuilt daily by 07:00 UTC
+    max_lag_hours: 31
+  completeness:
+    target: 100% of registered clients present
+  on_breach: "#data-engineering alerted; KYC-dependent processes should not run against stale data"
+
+compatibility: BACKWARD
+
+classification:
+  contains_pii: true
+  # These drive real controls: each maps to a policy tag in the Terraform taxonomy and a masking
+  # rule. Adding a PII field to this table without declaring it here is the failure mode CI exists
+  # to catch, because it would publish personal data untagged.
+  pii_classes: [person_name, date_of_birth, contact]
+  lawful_basis: contract performance and legal obligation (KYC/AML)
+  retention: 7 years after account closure, per AML record-keeping requirements
+
+access:
+  row_level: trading_region, per regulated entity
+  column_level: policy tags per pii_class; see terraform/modules/governance
+  personas: [uk_desk, marketing, compliance]
+
+consumers:
+  - name: Compliance KYC review
+    team: compliance
+    criticality: high
+  - name: Marketing CDP audience export
+    team: marketing
+    criticality: medium

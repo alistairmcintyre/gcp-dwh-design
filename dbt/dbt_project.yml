@@ -1,8 +1,8 @@
-name: "dbt_testing"
+name: "dwh"
 version: "1.0.0"
 config-version: 2
 
-profile: "dbt_testing"
+profile: "dwh"
 
 model-paths: ["models"]
 seed-paths: ["seeds"]
@@ -26,29 +26,74 @@ vars:
   # Toggle the Elementary package models + on-run-end hook (escape hatch per-warehouse).
   enable_elementary: true
 
+  # ---- Governance -------------------------------------------------------------------------------
+  # Policy-tag resource ids for column-level security on `dim_customer`. Empty by default so the
+  # DuckDB target and any project without the governance stack deployed still build. Terraform owns
+  # the taxonomy; `scripts/governance_vars.py` turns `terraform output` into the --vars payload, so
+  # the ids are never hard-coded per environment. See docs/governance.md.
+  # Maps the `meta.pii_class` declared on a column to the policy-tag resource id in *this*
+  # environment's taxonomy. Empty by default so DuckDB and un-governed projects still build.
+  policy_tag_ids: {}
+  # Fail the run if a column declares a pii_class with no tag id configured, rather than silently
+  # publishing untagged PII. Left false locally; CI and prod set it true (fail closed).
+  require_policy_tags: false
+
+  # Row-level security, keyed by model name and applied by the `apply_row_access_policies` post-hook
+  # (BigQuery only). Declared here rather than inline in the model so every row filter in the project
+  # is reviewable in one diff. Grantees are supplied per environment by the same script.
+  row_access_policies: {}
+
+
 models:
-  dbt_testing:
+  dwh:
     staging:
       +materialized: view
       +schema: staging
+      # Private to the `core` group: a division's model physically cannot `ref` a staging view.
+      # This is the platform interface enforced at parse time rather than in code review.
+      +group: core
+      +access: private
     intermediate:
       +materialized: ephemeral
       +schema: intermediate
+      +group: core
+      +access: private
     marts:
       +materialized: table
       +schema: marts
+      core:
+        # The conformed interface. `public` is the only access level a division may build on, and
+        # every model here carries an enforced contract -- see marts/core/_core__models.yml.
+        +group: core
+        +access: public
+      compliance:
+        +schema: marts_compliance
+        +group: compliance
+        +access: private
+      finance:
+        +schema: marts_finance
+        +group: finance
+        +access: private
+      # Push model + column descriptions into BigQuery. Also a prerequisite for `policy_tags`:
+      # dbt only sends the column-level schema patch that carries tags when column docs persist.
+      +persist_docs:
+        relation: true
+        columns: true
   # Elementary's own models (data-observability tables). Enabled on warehouses where Elementary is
   # first-class (e.g. BigQuery); skipped on DuckDB, whose dialect Elementary doesn't fully support.
+    features:
+      +group: ml
+      +access: private
   elementary:
     +enabled: "{{ var('enable_elementary', true) and target.type != 'duckdb' }}"
     +schema: elementary
 
 seeds:
-  dbt_testing:
+  dwh:
     +schema: seeds
 
 snapshots:
-  dbt_testing:
+  dwh:
     +schema: snapshots
 
 on-run-end:

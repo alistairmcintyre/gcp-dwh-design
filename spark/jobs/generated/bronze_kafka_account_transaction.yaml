@@ -1,0 +1,48 @@
+# GENERATED from streaming/topics.yaml by streaming/generate_topic_jobs.py. Do not edit.
+name: bronze_kafka_account_transaction
+description: 'Bronze offload for Kafka topic account.transaction.v3 (owner: payments, freshness SLO: 15m).
+  Generated from the topic registry.'
+sources:
+- name: topic_offload
+  format: gcs
+  options:
+    format: avro
+    path: gs://${LANDING_BUCKET}/kafka/account.transaction.v3/dt=${execution_date}/*
+transforms:
+- type: deduplicate
+  keys:
+  - transaction_id
+  order_by:
+  - event_timestamp
+  - kafka_offset
+  descending: true
+- type: with_columns
+  columns:
+    _ingested_at: current_timestamp()
+    event_date: cast(event_timestamp as date)
+    _kafka_offset: kafka_offset
+    _kafka_partition: kafka_partition
+quality:
+- name: key_present
+  expression: transaction_id is not null
+  on_failure: fail
+- name: event_timestamp_present
+  expression: event_timestamp is not null
+  on_failure: fail
+- name: event_timestamp_not_in_future
+  expression: event_timestamp <= current_timestamp() + interval 1 hour
+  on_failure: warn
+sink:
+  format: bigquery
+  mode: overwrite
+  partition_by:
+  - event_date
+  options:
+    table: ${GCP_PROJECT}.raw.kafka_account_transaction
+    writeMethod: direct
+    partitionType: DAY
+    clusteredFields: transaction_id
+spark_conf:
+  spark.sql.adaptive.enabled: 'true'
+  spark.sql.adaptive.coalescePartitions.enabled: 'true'
+  spark.sql.sources.partitionOverwriteMode: dynamic

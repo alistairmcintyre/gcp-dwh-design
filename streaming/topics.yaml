@@ -1,0 +1,162 @@
+# Kafka topic registry -- the source of truth for the ingestion estate.
+#
+# THE PROBLEM THIS SOLVES
+# Two hundred topics is not two hundred pipelines. It is ONE pipeline pattern and two hundred rows
+# of configuration. The moment a topic gets its own bespoke code, the estate stops being operable:
+# nobody can answer "which topics are behind?", a change to the DLQ policy has to be made two
+# hundred times, and onboarding is gated on the ingestion team's sprint capacity rather than on the
+# producing team's readiness.
+#
+# So the registry is the interface. Adding a topic is a pull request against this file, reviewed by
+# the ingestion team for the contract and by the producing team for the semantics. CI validates it,
+# and Terraform + the offload job generator do the rest -- no new code, no new DAG, no new image.
+#
+# Each entry is also the DATA CONTRACT for that topic: schema reference, ownership, delivery
+# semantics, PII classification and freshness SLO in one reviewable place.
+
+defaults: &defaults
+  # Schemas live in the registry, not here. Pinning a subject rather than inlining the schema is
+  # what allows the producer to evolve compatibly without a warehouse change.
+  schema_registry: https://schema-registry.internal.example.com
+  # BACKWARD compatibility means new consumers can read old data -- the right default for a
+  # warehouse, which replays history constantly. FULL is stricter and slows producers down; NONE
+  # means the warehouse breaks whenever a producer feels like it.
+  compatibility: BACKWARD
+  format: avro
+  # At-least-once: the sink must dedupe. Exactly-once through Kafka Connect is achievable but costs
+  # throughput and operational complexity; deduplicating on a key in the Bronze->Silver step is
+  # cheaper and easier to reason about. See spark/jobs/bronze_kafka_offload.yaml.
+  delivery: at_least_once
+  dead_letter: true
+  bronze_dataset: raw
+  partition_field: event_date
+  retention_days: 730
+
+topics:
+  - name: client.onboarding.v2
+    <<: *defaults
+    description: Client registrations, one event per completed account opening.
+    owner: identity-platform
+    subject: client.onboarding.v2-value
+    key: client_id
+    bronze_table: kafka_client_onboarding
+    dedupe_key: [event_id]
+    order_by: [event_timestamp]
+    # PII classes here match the dbt `meta.pii_class` vocabulary and the Terraform taxonomy, so a
+    # column is classified once, at the point it enters the estate, and every layer inherits it.
+    pii:
+      first_name: person_name
+      last_name: person_name
+      date_of_birth: date_of_birth
+      email: contact
+    freshness_slo_minutes: 15
+    volume_per_day: 40000
+
+  - name: client.status.v1
+    <<: *defaults
+    description: >
+      Account status changes -- restriction, suspension, closure -- carrying the reason:
+      appropriateness failure, vulnerable-client flag, expired KYC, or client request.
+      Regulatory-critical.
+    owner: compliance-platform
+    subject: client.status.v1-value
+    key: client_id
+    bronze_table: kafka_client_status
+    dedupe_key: [event_id]
+    order_by: [event_timestamp]
+    pii: {}
+    # Tightest SLO in the estate, and it is a compliance obligation rather than a preference: a
+    # restricted or vulnerable client who still appears in a marketing audience is a reportable
+    # breach, so this topic's freshness is paged on, not just dashboarded.
+    #
+    # This topic carries MULTIPLE event types on one subject, which is why it uses
+    # TopicRecordNameStrategy rather than the default TopicNameStrategy -- see README.
+    subject_name_strategy: TopicRecordNameStrategy
+    freshness_slo_minutes: 5
+    volume_per_day: 800
+    critical: true
+
+  - name: account.transaction.v3
+    <<: *defaults
+    description: Client-money deposits and withdrawals, including the first-time-deposit flag.
+    owner: payments
+    subject: account.transaction.v3-value
+    key: transaction_id
+    bronze_table: kafka_account_transaction
+    dedupe_key: [transaction_id]
+    order_by: [event_timestamp, kafka_offset]
+    pii: {}
+    freshness_slo_minutes: 15
+    volume_per_day: 250000
+    critical: true
+
+  - name: marketing.preferences.v1
+    <<: *defaults
+    description: Marketing opt-in/opt-out per product and channel.
+    owner: crm
+    subject: marketing.preferences.v1-value
+    key: client_id
+    bronze_table: kafka_marketing_preferences
+    # Preference events arrive unordered across partitions and the LATEST state is what matters --
+    # applying an older opt-out after a newer opt-in would re-consent someone who opted out, which
+    # is both a GDPR problem and the kind of bug that reaches a regulator rather than a backlog.
+    dedupe_key: [client_id, product, channel]
+    order_by: [event_timestamp]
+    pii: {}
+    freshness_slo_minutes: 30
+    volume_per_day: 15000
+    critical: true
+
+  - name: order.lifecycle.v1
+    <<: *defaults
+    description: >
+      Order lifecycle events -- placed, amended, working, filled, partially filled, cancelled,
+      rejected. One row per state transition, so the terminal state is derived downstream rather than
+      assumed. An order fills in 0..n trades, so this topic and trade.execution are joined on
+      order_id rather than being one stream.
+    owner: execution-platform
+    subject: order.lifecycle.v1-value
+    key: order_id
+    bronze_table: kafka_order_lifecycle
+    dedupe_key: [order_id, event_seq]
+    order_by: [event_timestamp, kafka_offset]
+    pii: {}
+    freshness_slo_minutes: 15
+    volume_per_day: 2100000
+    critical: true
+
+  - name: trade.execution.v2
+    <<: *defaults
+    description: >
+      Trade lifecycle events -- opened, amended, partially closed, closed, stopped out. One row per
+      state transition, so the terminal state is derived downstream rather than assumed. Highest
+      volume topic in the estate.
+    owner: execution-platform
+    subject: trade.execution.v2-value
+    key: trade_id
+    bronze_table: kafka_trade_execution
+    # Keyed by trade_id, ordered by the platform's monotonic sequence within the trade. An event-time
+    # tie is real at this volume, so kafka_offset breaks it -- it is the only total order available
+    # inside a partition.
+    dedupe_key: [trade_id, event_seq]
+    order_by: [event_timestamp, kafka_offset]
+    pii: {}
+    freshness_slo_minutes: 15
+    volume_per_day: 1200000
+    critical: true
+
+  - name: market.price.v1
+    <<: *defaults
+    description: >
+      Mid-price ticks per instrument_id. Sampled, not tick-for-tick -- the full feed belongs on the trading
+      platform, not in the warehouse. Used for revenue attribution and slippage analysis.
+    owner: pricing-platform
+    subject: market.price.v1-value
+    key: instrument_id
+    bronze_table: kafka_market_price
+    dedupe_key: [instrument_id, event_timestamp]
+    order_by: [event_timestamp, kafka_offset]
+    pii: {}
+    freshness_slo_minutes: 10
+    volume_per_day: 9000000
+    critical: true

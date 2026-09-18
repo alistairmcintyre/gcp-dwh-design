@@ -1,0 +1,49 @@
+# GENERATED from streaming/topics.yaml by streaming/generate_topic_jobs.py. Do not edit.
+name: bronze_kafka_market_price
+description: 'Bronze offload for Kafka topic market.price.v1 (owner: pricing-platform, freshness SLO:
+  10m). Generated from the topic registry.'
+sources:
+- name: topic_offload
+  format: gcs
+  options:
+    format: avro
+    path: gs://${LANDING_BUCKET}/kafka/market.price.v1/dt=${execution_date}/*
+transforms:
+- type: deduplicate
+  keys:
+  - instrument_id
+  - event_timestamp
+  order_by:
+  - event_timestamp
+  - kafka_offset
+  descending: true
+- type: with_columns
+  columns:
+    _ingested_at: current_timestamp()
+    event_date: cast(event_timestamp as date)
+    _kafka_offset: kafka_offset
+    _kafka_partition: kafka_partition
+quality:
+- name: key_present
+  expression: instrument_id is not null
+  on_failure: fail
+- name: event_timestamp_present
+  expression: event_timestamp is not null
+  on_failure: fail
+- name: event_timestamp_not_in_future
+  expression: event_timestamp <= current_timestamp() + interval 1 hour
+  on_failure: warn
+sink:
+  format: bigquery
+  mode: overwrite
+  partition_by:
+  - event_date
+  options:
+    table: ${GCP_PROJECT}.raw.kafka_market_price
+    writeMethod: direct
+    partitionType: DAY
+    clusteredFields: instrument_id
+spark_conf:
+  spark.sql.adaptive.enabled: 'true'
+  spark.sql.adaptive.coalescePartitions.enabled: 'true'
+  spark.sql.sources.partitionOverwriteMode: dynamic

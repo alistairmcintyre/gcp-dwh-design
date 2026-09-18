@@ -1,0 +1,67 @@
+# Bronze: land a Kafka topic's raw offload from GCS into BigQuery, unmodelled.
+#
+# This is the shape that scales to hundreds of topics: the pipeline is identical for every topic, so
+# onboarding topic 201 is this file with three values changed, generated from the topic registry
+# (streaming/topics.yaml). Nothing about it is per-topic code.
+name: bronze_kafka_offload_user_events
+description: >
+  Land the raw user-events topic offload into Bronze. No business logic: Bronze keeps the payload as
+  received, so a modelling bug is fixed by replaying from here rather than by asking the source
+  system for history it may no longer hold.
+
+sources:
+  - name: topic_offload
+    format: gcs
+    options:
+      format: avro
+      # Kafka Connect's GCS sink writes date-partitioned paths; the glob prunes to one day so a
+      # single-date backfill does not read the entire topic history.
+      path: gs://dwh-landing-dev/kafka/user_events/dt=${execution_date}/*.avro
+
+transforms:
+  # Kafka delivers at-least-once, so the same event can land twice; and ordering holds only within
+  # a partition, so "latest wins" needs an explicit event-time ordering rather than dropDuplicates.
+  - type: deduplicate
+    keys: [event_id]
+    order_by: [kafka_timestamp]
+    descending: true
+
+  - type: with_columns
+    columns:
+      _ingested_at: current_timestamp()
+      event_date: cast(event_timestamp as date)
+      # Carried so a row traces back to the exact Kafka message. The first question in any streaming
+      # incident is "which offset did this come from".
+      _kafka_offset: kafka_offset
+      _kafka_partition: kafka_partition
+
+quality:
+  - name: event_id_present
+    expression: event_id is not null
+    on_failure: fail
+  - name: event_timestamp_present
+    expression: event_timestamp is not null
+    on_failure: fail
+  # Warn, not fail: producer clock skew is normal and a few slightly-future timestamps are not worth
+  # halting ingestion for. A sustained rise shows up on the metric instead.
+  - name: event_timestamp_not_in_future
+    expression: event_timestamp <= current_timestamp() + interval 1 hour
+    on_failure: warn
+
+sink:
+  format: bigquery
+  mode: overwrite
+  partition_by: [event_date]
+  options:
+    table: your-project-id.raw.kafka_user_events
+    writeMethod: direct
+    partitionType: DAY
+    clusteredFields: client_id
+
+spark_conf:
+  spark.sql.adaptive.enabled: "true"
+  # Coalesce the many small files a Kafka offload produces into sensible output partitions.
+  spark.sql.adaptive.coalescePartitions.enabled: "true"
+  # Replace only the partitions this run produced, so re-running one date is idempotent and leaves
+  # the rest of the table untouched -- the same guarantee dbt's insert_overwrite gives on the batch side.
+  spark.sql.sources.partitionOverwriteMode: dynamic

@@ -1,0 +1,37 @@
+version: 2
+
+models:
+  - name: feat_client_activity
+    description: >
+      Client feature vector for online serving, synced to Vertex AI Feature Store. One row per
+      client with 30-day behavioural aggregates and low-cardinality categoricals. Deliberately
+      contains no PII: the online store is outside the BigQuery access-control path, so anything
+      sensitive is aggregated or dropped here. See terraform/modules/vertex_feature_store.
+    columns:
+      - name: client_id
+        description: "Entity id for the feature store. Pseudonymous."
+        data_tests: [unique, not_null]
+      - name: feature_timestamp
+        description: >
+          When this feature vector became knowable. Required by Vertex AI for point-in-time correct
+          training-data generation -- without it, training rows can see feature values that did not
+          exist at the time, producing a model that scores well offline and fails in production.
+        data_tests: [not_null]
+      - name: active_days_30d
+        description: "Distinct days with trading or client-money activity in the last 30 days."
+      - name: trade_count_30d
+        description: "Trades closed in the last 30 days."
+      - name: notional_30d
+        description: "{{ doc('notional_volume') }} Last 30 days."
+      - name: trading_revenue_30d
+        description: "{{ doc('trading_revenue') }} Last 30 days."
+      - name: net_deposit_30d
+        description: "{{ doc('net_deposit') }} Last 30 days."
+      - name: tenure_days
+        description: "Days since registration. Derived, rather than serving the raw date, which is a weak feature and a strong quasi-identifier."
+      - name: trading_region
+        description: "{{ doc('trading_region') }}"
+      - name: acquisition_channel
+        description: "{{ doc('acquisition_channel') }}"
+      - name: platform
+        description: "Device platform: ios or android."

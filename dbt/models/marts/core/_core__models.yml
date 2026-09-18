@@ -1,0 +1,248 @@
+version: 2
+
+models:
+  - name: fct_acquisition_events
+    description: >
+      Daily acquisition funnel by acquisition channel and platform: install, registration and
+      first-deposit counts. Incremental (partitioned by `event_date` on BigQuery). Measures are additive;
+      derive conversion rates (registrations / installs) downstream as ratios are not additive.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [event_date, acquisition_channel, platform]
+    columns:
+      - name: event_date
+        description: "UTC calendar date of the events (partition key)."
+        data_type: date
+        constraints: [{ type: not_null }]
+        data_tests: [not_null]
+      - name: acquisition_channel
+        description: "{{ doc('acquisition_channel') }}"
+        data_type: string
+        constraints: [{ type: not_null }]
+        data_tests: [not_null]
+      - name: channel_type
+        description: "Broad channel grouping: Paid Social, Paid Search, Organic, or Other."
+        data_type: string
+      - name: is_paid
+        description: "True when the channel is a paid-media source."
+        data_type: bool
+      - name: platform
+        description: "Device platform: ios or android."
+        data_type: string
+        constraints: [{ type: not_null }]
+        data_tests: [not_null]
+      - name: installs
+        description: "Count of install events."
+        data_type: int64
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: registrations
+        description: "Count of registration events."
+        data_type: int64
+        data_tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: first_deposits
+        description: "Count of first-deposit events."
+        data_type: int64
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+
+  - name: fct_client_activity
+    description: >
+      Daily per-client trading activity: trade count, notional traded, platform trading revenue and client
+      money flow, enriched with acquisition channel and the regulated entity that owns the
+      relationship. Incremental (partitioned by `activity_date`, clustered by dominant asset class on
+      BigQuery); idempotent over the run's data-interval window.
+
+      Trades are attributed to their **close** date, because revenue is realised on close and a
+      position held across several days must not inflate activity on each of them.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [activity_date, client_id]
+    columns:
+      - name: activity_date
+        description: "UTC date of the client's activity (partition key)."
+        data_type: date
+        constraints: [{ type: not_null }]
+        data_tests: [not_null]
+      - name: client_id
+        description: "Platform client id."
+        data_type: string
+        constraints: [{ type: not_null }]
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_clients')
+              field: client_id
+      - name: acquisition_channel
+        description: "{{ doc('acquisition_channel') }}"
+        data_type: string
+      - name: channel_type
+        description: "Broad channel grouping for the client's acquisition source."
+        data_type: string
+      - name: country
+        description: "ISO country code of the client."
+        data_type: string
+      - name: trading_region
+        description: "{{ doc('trading_region') }}"
+        data_type: string
+      - name: client_category
+        description: "{{ doc('client_category') }}"
+        data_type: string
+      - name: platform
+        description: "Device platform: ios or android."
+        data_type: string
+      - name: asset_class_mix
+        description: >
+          The client's dominant asset class on the day by notional. Low-cardinality and the most
+          common filter on this table, which is why it is the clustering key.
+        data_type: string
+      - name: trade_count
+        description: "Number of trades closed on the day."
+        data_type: int64
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: total_notional
+        description: "{{ doc('notional_volume') }}"
+        data_type: numeric
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: client_pnl
+        description: "{{ doc('client_pnl') }}"
+        data_type: numeric
+      - name: spread_revenue
+        description: "Platform revenue from the dealing spread on trades closed that day."
+        data_type: numeric
+      - name: commission
+        description: "Explicit commission charged on trades closed that day."
+        data_type: numeric
+      - name: funding_charge
+        description: "Overnight funding charged on trades closed that day."
+        data_type: numeric
+      - name: trading_revenue
+        description: "{{ doc('trading_revenue') }}"
+        data_type: numeric
+      - name: deposit_amount
+        description: "Sum of completed deposits on the day."
+        data_type: numeric
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: withdrawal_amount
+        description: "Sum of completed withdrawals on the day."
+        data_type: numeric
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: net_deposit
+        description: "{{ doc('net_deposit') }}"
+        data_type: numeric
+
+  - name: dim_client
+    description: >
+      Gold client dimension: one row per registered client with KYC/PII attributes, the regulatory
+      attributes that govern the relationship, and lifetime value measures. **This is the governed
+      table** used to demonstrate BigQuery fine-grained access control -- column-level security via
+      Dataplex policy tags with dynamic data masking, plus a row access policy on `trading_region`.
+      The `policy_tags` below are the version-controlled source of truth for which columns are
+      sensitive; `terraform/modules/governance` owns the taxonomy those tag ids come from and the
+      masking rules attached to them. See `docs/governance.md`.
+    config:
+      # Column-level `persist_docs` is a hard prerequisite for dbt applying `policy_tags` to BigQuery.
+      persist_docs:
+        relation: true
+        columns: true
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [client_id]
+    columns:
+      - name: client_id
+        description: "Primary key: platform client id. Pseudonymous, so deliberately *not* tagged."
+        data_type: string
+        constraints: [{ type: not_null }]
+        data_tests: [unique, not_null]
+      - name: first_name
+        description: "{{ doc('pii_person_name') }}"
+        data_type: string
+        meta: { pii_class: person_name }
+      - name: last_name
+        description: "{{ doc('pii_person_name') }}"
+        data_type: string
+        meta: { pii_class: person_name }
+      - name: date_of_birth
+        description: "{{ doc('pii_date_of_birth') }}"
+        data_type: date
+        meta: { pii_class: date_of_birth }
+      - name: email
+        description: "{{ doc('pii_contact') }}"
+        data_type: string
+        meta: { pii_class: contact }
+      - name: country
+        description: "ISO country code of the client."
+        data_type: string
+      - name: trading_region
+        description: "{{ doc('trading_region') }}"
+        data_type: string
+        constraints: [{ type: not_null }]
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: ["UK", "EMEA", "APAC", "US", "OTHER"]
+      - name: client_category
+        description: "{{ doc('client_category') }}"
+        data_type: string
+        data_tests:
+          - accepted_values:
+              values: ["RETAIL", "PROFESSIONAL", "ELECTIVE_PROFESSIONAL"]
+      - name: account_status
+        description: "{{ doc('account_status') }}"
+        data_type: string
+        data_tests:
+          - accepted_values:
+              values: ["ACTIVE", "RESTRICTED", "SUSPENDED", "DORMANT", "CLOSED"]
+      - name: account_status_reason
+        description: "Cause of a non-ACTIVE status; null while ACTIVE."
+        data_type: string
+      - name: platform
+        description: "Device platform: ios or android."
+        data_type: string
+      - name: registration_date
+        description: "UTC calendar date the client registered."
+        data_type: date
+      - name: acquisition_channel
+        description: "{{ doc('acquisition_channel') }}"
+        data_type: string
+      - name: first_activity_date
+        description: "First date the client closed a trade or transacted; null if never active."
+        data_type: date
+      - name: last_activity_date
+        description: "Most recent date the client closed a trade or transacted; null if never active."
+        data_type: date
+      - name: lifetime_trade_count
+        description: "Total trades closed across all history."
+        data_type: int64
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: lifetime_notional
+        description: "{{ doc('notional_volume') }} Summed across all history."
+        data_type: numeric
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: lifetime_trading_revenue
+        description: "{{ doc('trading_revenue') }} Summed across all history."
+        data_type: numeric
+      - name: lifetime_client_pnl
+        description: "{{ doc('client_pnl') }} Summed across all history."
+        data_type: numeric
+      - name: lifetime_net_deposit
+        description: "{{ doc('net_deposit') }} Summed across all history."
+        data_type: numeric

@@ -5,7 +5,7 @@ with source as (
 select
     event_id,
     appsflyer_id,
-    user_id,
+    client_id,
     event_name,
     event_time,
     cast(event_time as date) as event_date,

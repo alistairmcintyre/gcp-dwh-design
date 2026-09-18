@@ -1,0 +1,67 @@
+# Serving: publish per-client risk tier and margin multiplier to Firestore for the trading app to
+# read at request time.
+#
+# This is the case Spark is genuinely right for, and why the framework has a non-warehouse sink at
+# all: the output is not a table anyone queries analytically, it is a key-value document read on the
+# product's hot path when a client opens a position. BigQuery cannot serve that -- single-row lookups
+# cost hundreds of milliseconds and a query charge each -- so the pipeline has to end somewhere else.
+name: serving_client_margin
+description: Compute per-client risk tier and margin multiplier, and publish to Firestore for serving.
+
+sources:
+  - name: activity
+    format: bigquery
+    options:
+      table: your-project-id.marts.fct_client_activity
+      filter: "activity_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)"
+
+transforms:
+  - type: aggregate
+    group_by: [client_id]
+    aggregations:
+      notional_30d: sum(total_notional)
+      trading_revenue_30d: sum(trading_revenue)
+      client_pnl_30d: sum(client_pnl)
+      active_days: count(distinct activity_date)
+  - type: with_columns
+    columns:
+      # Margin multiplier applied on top of the instrument's base margin factor. Higher-turnover,
+      # consistently active clients get the standard requirement; thin or erratic accounts are
+      # margined more conservatively. Retail leverage caps are enforced upstream by client
+      # categorisation -- this only ever tightens, never loosens.
+      margin_multiplier: >
+        case when notional_30d >= 1000000 and active_days >= 15 then 1.00
+             when notional_30d >= 250000 and active_days >= 8 then 1.10
+             when notional_30d >= 50000 then 1.25
+             else 1.50 end
+      risk_tier: >
+        case when notional_30d >= 1000000 then 'tier_1'
+             when notional_30d >= 250000 then 'tier_2'
+             else 'tier_3' end
+  # Shape the frame to the SINK's throughput, not Spark's. Firestore has a per-second write quota;
+  # an unbounded Spark job will exceed it and start failing the batch, so concurrency is capped here.
+  - type: repartition
+    count: 8
+
+quality:
+  # A multiplier below 1.0 would under-margin a client, which is a capital-adequacy issue rather than
+  # a data one -- so it fails the job before the write instead of being corrected downstream.
+  - name: margin_multiplier_within_policy
+    expression: margin_multiplier between 1.0 and 1.5
+    on_failure: fail
+  - name: client_id_present
+    expression: client_id is not null
+    on_failure: fail
+
+sink:
+  format: firestore
+  mode: overwrite
+  options:
+    project: your-project-id
+    collection: client_margin
+    key_field: client_id
+    max_writers: 8
+    batch_size: 400
+
+spark_conf:
+  spark.sql.adaptive.enabled: "true"

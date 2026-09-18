@@ -15,16 +15,16 @@ exposures:
       name: Marketing Analytics
       email: marketing-analytics@example.com
 
-  - name: player_activity_dashboard
-    label: "Player Activity & GGR Dashboard"
+  - name: client_activity_dashboard
+    label: "Client Activity & Revenue Dashboard"
     type: dashboard
     maturity: medium
-    url: https://bi.example.com/dashboards/player-activity
+    url: https://bi.example.com/dashboards/client-activity
     description: >
-      Daily bet volume, GGR, deposits and withdrawals by user and acquisition channel; used by trading and
-      finance for revenue and player-value reporting.
+      Daily notional traded, trading revenue, deposits and withdrawals by client and acquisition
+      channel; used by trading and finance for revenue and client-value reporting.
     depends_on:
-      - ref('fct_user_activity')
+      - ref('fct_client_activity')
     owner:
       name: Trading & Finance
       email: trading-analytics@example.com

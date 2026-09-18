@@ -8,7 +8,7 @@ max_line_length = 120
 [sqlfluff:templater:dbt]
 project_dir = dbt
 profiles_dir = dbt
-profile = dbt_testing
+profile = dwh
 target = dev
 
 [sqlfluff:indentation]

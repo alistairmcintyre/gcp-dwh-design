@@ -1,0 +1,96 @@
+# Data contract: marts.fct_client_activity
+#
+# The Gold daily activity fact. Consumed by BI, by finance reporting, and by the Firestore serving
+# job -- so a breaking change here is felt in three places with three different tolerances.
+apiVersion: v1
+kind: DataContract
+id: marts.fct_client_activity
+version: 2.1.0
+
+owner:
+  team: data-engineering
+  # A named accountable owner, not just a team: "the team" cannot approve a schema change at 4pm.
+  steward: principal-data-engineer
+  slack: "#data-engineering"
+
+description: >
+  One row per client per activity date: notional traded, trading revenue, deposits and withdrawals, enriched
+  with the client's acquisition channel. The canonical source for daily client-level revenue.
+
+grain:
+  columns: [activity_date, client_id]
+  uniqueness: enforced
+
+schema:
+  - name: activity_date
+    type: DATE
+    required: true
+    description: UTC calendar date of the activity. Partition key.
+  - name: client_id
+    type: STRING
+    required: true
+    description: Platform client id. Pseudonymous; joins to dim_client.
+  - name: acquisition_channel
+    type: STRING
+    required: false
+    description: Human-readable grouping of the AppsFlyer media source that acquired the client.
+  - name: trade_count
+    type: INT64
+    required: false
+    description: Number of trades placed on the day. Non-negative.
+  - name: total_notional
+    type: NUMERIC
+    required: false
+    description: >
+      Sum of notional value across trades closed in the period. Notional is trade size multiplied by
+      the price of the underlying. Measures trading activity independent of outcome. Changing this
+      definition is a MAJOR version bump -- finance reports off it.
+  - name: trading_revenue
+    type: NUMERIC
+    required: false
+    description: >
+      platform trading revenue: spread_revenue + commission + funding_charge. NOT the client's loss --
+      client_pnl is carried separately and reconciled by a singular test. Signed off by Finance; any
+      change to this formula requires their approval, not just the data owner's.
+  - name: net_deposit
+    type: NUMERIC
+    required: false
+    description: deposit_amount - withdrawal_amount over completed transactions.
+
+guarantees:
+  - grain is unique on [activity_date, client_id]
+  - every client_id exists in marts.dim_client
+  - trade_count, total_notional, deposit_amount, withdrawal_amount are >= 0
+  - trading_revenue = total_notional - client_pnl, to within 0.01
+
+slo:
+  # Numbers, not adjectives. "Fresh" is not an SLO; 07:00 UTC is.
+  freshness:
+    target: data for date D is available by 07:00 UTC on D+1
+    max_lag_hours: 31
+  completeness:
+    target: 99.9% of expected rows present
+  availability:
+    target: 99.5% of queries succeed
+  # What consumers may rely on when a target is missed. Stating this is what stops every SLO breach
+  # becoming an escalation.
+  on_breach: "#data-engineering alerted; consumers should treat the latest partition as provisional"
+
+compatibility: BACKWARD
+
+classification:
+  contains_pii: false
+  # client_id is pseudonymous: it identifies a person only in combination with dim_client, which is
+  # itself governed. Worth stating explicitly -- "no PII" claims about id columns are often wrong.
+  notes: client_id is a pseudonymous identifier, not a direct identifier.
+
+consumers:
+  - name: Looker -- Client Value dashboard
+    team: bi
+    criticality: high
+  - name: Finance daily revenue pack
+    team: finance
+    criticality: high
+  - name: serving_client_bonuses (Spark -> Firestore)
+    team: data-engineering
+    criticality: medium

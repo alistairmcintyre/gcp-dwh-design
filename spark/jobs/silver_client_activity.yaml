@@ -1,0 +1,77 @@
+# Silver: conform Bronze into a joined view of daily customer activity.
+#
+# WHEN SPARK RATHER THAN dbt+BigQuery. This job is deliberately one BigQuery would also handle well
+# -- and if the data is already in BigQuery, dbt is the better tool: cheaper, more testable, and
+# readable by analysts. Spark earns its place when at least one of these holds:
+#   * the source is not in BigQuery (GCS files, JDBC, a Kafka offload) and loading it first costs
+#     more than processing it where it lies
+#   * the transformation is not expressible in SQL (custom Python/Scala, ML featurisation, complex
+#     stateful logic, parsing binary or deeply nested payloads)
+#   * the output is not a BigQuery table (Firestore for serving, files for a partner feed)
+#   * volume makes slot contention or bytes-scanned cost worse than a batch
+# Kept simple here to show the framework's shape; the Firestore job is the honest case for Spark.
+name: silver_client_activity
+description: Join Bronze trades and clients into a daily per-client activity table in Silver.
+
+sources:
+  - name: trades
+    format: bigquery
+    options:
+      table: your-project-id.raw.trades
+      # Pushed down to BigQuery's storage read API, so only these rows cross the wire. Reading the
+      # whole table and filtering in Spark is the classic way to multiply this job's cost.
+      filter: "DATE(closed_at) >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)"
+  - name: clients
+    format: bigquery
+    options:
+      table: your-project-id.raw.clients
+
+transforms:
+  # Only closed trades contribute revenue. An OPEN position has unrealised P&L, which is a risk
+  # measure, not a revenue one -- including it here would overstate the day.
+  - type: filter
+    expression: status in ('CLOSED', 'PART_CLOSED', 'STOPPED_OUT')
+  - type: with_columns
+    columns:
+      activity_date: cast(closed_at as date)
+  - type: join
+    source: clients
+    on: [client_id]
+    how: left
+    # A few hundred thousand clients broadcasts comfortably, avoiding a shuffle of the much larger
+    # trades frame. Forced explicitly because Spark's size estimates for BigQuery sources are
+    # unreliable, so the automatic broadcast threshold cannot be counted on.
+    broadcast: true
+  - type: aggregate
+    group_by: [activity_date, client_id, country]
+    aggregations:
+      trade_count: count(1)
+      total_notional: sum(notional_value)
+      client_pnl: sum(client_pnl)
+      spread_revenue: sum(spread_revenue)
+      commission: sum(commission)
+      funding_charge: sum(funding_charge)
+      trading_revenue: sum(spread_revenue) + sum(commission) + sum(funding_charge)
+
+quality:
+  - name: no_negative_notional
+    expression: total_notional >= 0
+    on_failure: fail
+  # the platform's revenue is the spread plus commission plus funding -- NOT the client's loss. Asserting the
+  # identity here stops the two ever being silently conflated, which is the classic error in this
+  # domain and the one that reaches Finance rather than a backlog.
+  - name: revenue_reconciles
+    expression: abs(trading_revenue - (spread_revenue + commission + funding_charge)) < 0.01
+    on_failure: fail
+
+sink:
+  format: bigquery
+  mode: overwrite
+  partition_by: [activity_date]
+  options:
+    table: your-project-id.staging.spark_client_activity
+    writeMethod: direct
+
+spark_conf:
+  spark.sql.adaptive.enabled: "true"
+  spark.sql.sources.partitionOverwriteMode: dynamic

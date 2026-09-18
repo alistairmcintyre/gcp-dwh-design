@@ -1,24 +1,33 @@
 version: 2
 
 models:
-  - name: int_user_daily_activity
+  - name: int_client_daily_activity
     description: >
-      One row per user per activity date, combining settled-bet aggregates (volume, payout, GGR) with
-      completed wallet transactions (deposits, withdrawals). Ephemeral building block for
-      `fct_user_activity`.
+      One row per client per activity date, combining closed-trade aggregates (notional, client P&L,
+      platform trading revenue) with completed client-money transactions (deposits, withdrawals). Ephemeral
+      building block for `fct_client_activity`.
+
+      Trades are attributed to their **close** date: revenue is realised on close, and a position held
+      across several days must not inflate activity on each of them.
     columns:
-      - name: user_id
-        description: "Platform user id."
+      - name: client_id
+        description: "Platform client id."
       - name: activity_date
-        description: "UTC date of activity (bet placed and/or transaction created)."
-      - name: bet_count
-        description: "Number of bets placed on the day."
-      - name: total_stake
-        description: "{{ doc('bet_volume') }}"
-      - name: total_payout
-        description: "Total amount returned to the user from settled bets on the day."
-      - name: ggr
-        description: "{{ doc('ggr') }}"
+        description: "UTC date of activity (trade closed and/or transaction created)."
+      - name: trade_count
+        description: "Number of trades closed on the day."
+      - name: total_notional
+        description: "{{ doc('notional_volume') }}"
+      - name: client_pnl
+        description: "{{ doc('client_pnl') }}"
+      - name: spread_revenue
+        description: "Platform revenue from the dealing spread on trades closed that day."
+      - name: commission
+        description: "Explicit commission charged on trades closed that day."
+      - name: funding_charge
+        description: "Overnight funding charged on trades closed that day."
+      - name: trading_revenue
+        description: "{{ doc('trading_revenue') }}"
       - name: deposit_amount
         description: "Sum of completed deposits on the day."
       - name: withdrawal_amount

@@ -10,12 +10,12 @@ models:
       - name: appsflyer_id
         description: "AppsFlyer device identifier."
         data_tests: [not_null]
-      - name: user_id
-        description: "Platform user id; null for pre-registration events."
+      - name: client_id
+        description: "Platform client id; null for pre-registration events."
         data_tests:
           - relationships:
-              to: ref('stg_users')
-              field: user_id
+              to: ref('stg_clients')
+              field: client_id
       - name: event_name
         description: "Event type (install, registration, login, first_deposit)."
         data_tests: [not_null]
@@ -37,20 +37,33 @@ models:
       - name: loaded_at
         description: "Ingestion timestamp."
 
-  - name: stg_users
+  - name: stg_clients
     description: "Cleaned registered users, one row per user."
     columns:
-      - name: user_id
+      - name: client_id
         description: "Primary key: platform user id."
         data_tests: [unique, not_null]
       - name: appsflyer_id
         description: "AppsFlyer device id that registered this user."
+      - name: first_name
+        description: "{{ doc('pii_person_name') }}"
+      - name: last_name
+        description: "{{ doc('pii_person_name') }}"
+      - name: date_of_birth
+        description: "{{ doc('pii_date_of_birth') }}"
+      - name: email
+        description: "{{ doc('pii_contact') }}"
       - name: registration_time
         description: "UTC timestamp the user registered."
       - name: registration_date
         description: "UTC calendar date the user registered."
       - name: country
         description: "ISO country code."
+      - name: trading_region
+        description: "{{ doc('trading_region') }}"
+        data_tests:
+          - accepted_values:
+              values: ["UK", "EMEA", "APAC", "US", "OTHER"]
       - name: media_source
         description: "Media source that acquired the user (renamed from acquisition_media_source)."
         data_tests: [not_null]
@@ -59,59 +72,141 @@ models:
       - name: loaded_at
         description: "Ingestion timestamp."
 
-  - name: stg_bets
-    description: "Cleaned settled bets, one row per bet, with money columns cast to numeric."
+  - name: stg_trades
+    description: >
+      Cleaned trades, one row per trade, with money columns cast to numeric. Carries the platform's revenue
+      components (spread, commission, overnight funding) separately from the client's realised P&L --
+      see `trading_revenue`.
     columns:
-      - name: bet_id
-        description: "Primary key for the bet."
+      - name: trade_id
+        description: "Primary key for the trade (one execution)."
         data_tests: [unique, not_null]
-      - name: user_id
-        description: "User who placed the bet."
+      - name: order_id
+        description: "Order this execution filled against."
         data_tests:
           - not_null
           - relationships:
-              to: ref('stg_users')
-              field: user_id
-      - name: placed_at
-        description: "UTC timestamp the bet was placed."
-      - name: settled_at
-        description: "UTC timestamp the bet was settled."
-      - name: placed_date
-        description: "UTC calendar date the bet was placed (activity grain key)."
+              to: ref('stg_orders')
+              field: order_id
+      - name: client_id
+        description: "Client who opened the trade."
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_clients')
+              field: client_id
+      - name: instrument_id
+        description: "instrument code for the market traded."
         data_tests: [not_null]
-      - name: sport
-        description: "Sport/category the bet was on."
-      - name: bet_status
-        description: "Settlement status: won, lost, void, or cashout."
-      - name: stake
-        description: "{{ doc('bet_volume') }}"
+      - name: market_name
+        description: "Human-readable market name."
+      - name: asset_class
+        description: "Asset class of the underlying."
+      - name: product_type
+        description: "CFD or SPREAD_BET."
+      - name: direction
+        description: "BUY (long) or SELL (short)."
+      - name: opened_at
+        description: "UTC timestamp the position was opened."
+      - name: closed_at
+        description: "UTC timestamp the position was closed; null while still open."
+      - name: opened_date
+        description: "UTC calendar date the position was opened."
+        data_tests: [not_null]
+      - name: closed_date
+        description: "UTC calendar date the position was closed (activity grain key); null while open."
+      - name: trade_status
+        description: "OPEN, PART_CLOSED, CLOSED, STOPPED_OUT or CANCELLED."
+      - name: currency
+        description: "Account currency the trade settles in."
+      - name: quantity
+        description: "Contracts (CFD) or stake per point (spread bet). Always positive."
         data_tests:
           - not_null
           - dbt_utils.expression_is_true:
+              expression: "> 0"
+      - name: opening_price
+        description: "Price of the underlying at open."
+      - name: closing_price
+        description: "Price of the underlying at close; null while still open."
+      - name: notional_value
+        description: "{{ doc('notional_volume') }}"
+        data_tests:
+          - dbt_utils.expression_is_true:
               expression: ">= 0"
-      - name: decimal_odds
-        description: "Decimal odds at which the bet was placed."
-      - name: payout
-        description: "Amount returned to the customer."
+      - name: client_pnl
+        description: "{{ doc('client_pnl') }}"
+      - name: spread_revenue
+        description: "Platform revenue from the dealing spread."
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: commission
+        description: "Explicit commission charged; zero for most markets."
+      - name: funding_charge
+        description: "Overnight funding charged on the position."
+      - name: trading_revenue
+        description: "{{ doc('trading_revenue') }}"
+      - name: loaded_at
+        description: "Ingestion timestamp."
+
+  - name: stg_orders
+    description: "Cleaned client instructions, one row per order."
+    columns:
+      - name: order_id
+        description: "Primary key for the order."
+        data_tests: [unique, not_null]
+      - name: client_id
+        description: "Client who placed the order."
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_clients')
+              field: client_id
+      - name: instrument_id
+        description: "instrument code."
+      - name: order_type
+        description: "MARKET, LIMIT or STOP."
+      - name: order_status
+        description: "WORKING, PART_FILLED, FILLED, CANCELLED or REJECTED."
+      - name: quantity
+        description: "Contracts (CFD) or stake per point (spread bet)."
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: "> 0"
+      - name: loaded_at
+        description: "Ingestion timestamp."
+
+  - name: stg_quotes
+    description: "Sampled bid/ask ticks per instrument, with the spread derived."
+    columns:
+      - name: instrument_id
+        description: "instrument code."
+        data_tests: [not_null]
+      - name: quote_time
+        description: "UTC timestamp of the tick."
+        data_tests: [not_null]
+      - name: spread
+        description: "ask - bid. Never negative in a well-formed quote."
         data_tests:
           - dbt_utils.expression_is_true:
               expression: ">= 0"
       - name: loaded_at
         description: "Ingestion timestamp."
 
-  - name: stg_transactions
-    description: "Cleaned wallet transactions, one row per deposit/withdrawal."
+  - name: stg_account_transactions
+    description: "Cleaned client-money transactions, one row per deposit/withdrawal."
     columns:
       - name: transaction_id
         description: "Primary key for the transaction."
         data_tests: [unique, not_null]
-      - name: user_id
-        description: "User the transaction belongs to."
+      - name: client_id
+        description: "Client the transaction belongs to."
         data_tests:
           - not_null
           - relationships:
-              to: ref('stg_users')
-              field: user_id
+              to: ref('stg_clients')
+              field: client_id
       - name: created_at
         description: "UTC timestamp the transaction was created."
       - name: transaction_date

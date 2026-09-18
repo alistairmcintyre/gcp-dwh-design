@@ -1,0 +1,21 @@
+[project]
+name = "dataproc-etl-framework"
+version = "1.0.0"
+description = "Config-driven Spark ETL framework for Dataproc Serverless"
+requires-python = ">=3.11"
+dependencies = [
+    # Pinned to the Spark bundled in the Dataproc Serverless 2.2 runtime. Pinning matters: the
+    # framework is tested against the version it will actually run on, so a runtime upgrade is a
+    # deliberate change with a test run behind it, not a surprise on the next batch.
+    "pyspark==3.5.1",
+    "pyyaml>=6.0",
+    "google-cloud-storage>=2.14",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+firestore = ["google-cloud-firestore>=2.14"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

@@ -4,13 +4,26 @@ sources:
   - name: raw
     schema: raw
     description: >
-      Raw landed data for the demo: AppsFlyer mobile-attribution events plus the betting platform's
-      users, bets, and transactions. Populated by `scripts/generate_test_data.py` (DuckDB locally, or a
-      BigQuery `raw` dataset in Composer). `_loaded_at` is the ingestion timestamp used for freshness.
+      Raw landed data: AppsFlyer mobile-attribution events plus the trading platform's clients, trades
+      and client-money transactions. Populated by `scripts/generate_test_data.py` (DuckDB locally, or a
+      BigQuery `raw` dataset in Composer).
+
+      FRESHNESS USES AN INGESTION TIMESTAMP, DELIBERATELY. `_loaded_at` is stamped by the ingestion
+      process, not by the producing system. Pointing `loaded_at_field` at an EVENT timestamp
+      (`opened_at`, `event_time`) looks tempting and breaks in both directions: late-arriving data
+      makes a healthy pipeline look stale, and far worse, a single clock-skewed or future-dated
+      event pins `max(event_ts)` in the future, so the source reports fresh forever and the alarm
+      never fires again. An ingestion timestamp is monotonic by construction.
+
+      Note also that omitting `loaded_at_field` entirely makes dbt fall back to warehouse table
+      metadata, which updates on any write, including a schema patch that added no rows. Cheaper,
+      but it answers "was this table touched", not "did data arrive".
     loaded_at_field: _loaded_at
     freshness:
       warn_after: { count: 24, period: hour }
       error_after: { count: 72, period: hour }
+      # On a large partitioned table, restrict the freshness scan instead of reading all history.
+      # filter: "_PARTITIONTIME >= timestamp_sub(current_timestamp(), interval 2 day)"
     tables:
       - name: appsflyer_events
         description: "One row per AppsFlyer event (install, registration, login, first_deposit)."
@@ -21,8 +34,8 @@ sources:
           - name: appsflyer_id
             description: "AppsFlyer device identifier; present on every event including pre-registration."
             data_tests: [not_null]
-          - name: user_id
-            description: "Platform user id; null for pre-registration events (e.g. install)."
+          - name: client_id
+            description: "Platform client id; null for pre-registration events (e.g. install)."
           - name: event_name
             description: "Event type."
             data_tests:
@@ -44,65 +57,211 @@ sources:
           - name: _loaded_at
             description: "Ingestion timestamp (freshness field)."
 
-      - name: users
-        description: "One row per registered user."
+      - name: clients
+        description: "One row per registered client."
         columns:
-          - name: user_id
-            description: "Primary key: platform user id."
+          - name: client_id
+            description: "Primary key: platform client id."
             data_tests: [unique, not_null]
           - name: appsflyer_id
-            description: "AppsFlyer device id that registered this user."
+            description: "AppsFlyer device id that registered this client."
+          - name: first_name
+            description: "PII. Client given name. Policy-tagged `pii.person_name` downstream."
+          - name: last_name
+            description: "PII. Client family name. Policy-tagged `pii.person_name` downstream."
+          - name: date_of_birth
+            description: "PII. Client date of birth; a KYC identity attribute. Policy-tagged `pii.date_of_birth`."
+          - name: email
+            description: "PII. Client email address. Policy-tagged `pii.contact` downstream."
           - name: registration_time
-            description: "UTC timestamp the user registered."
+            description: "UTC timestamp the client registered."
             data_tests: [not_null]
           - name: country
-            description: "ISO country code."
+            description: "ISO country code, which determines the regulated entity."
+          - name: client_category
+            description: "{{ doc('client_category') }}"
+            data_tests:
+              - accepted_values:
+                  values: ["RETAIL", "PROFESSIONAL", "ELECTIVE_PROFESSIONAL"]
+          - name: account_status
+            description: "{{ doc('account_status') }}"
+            data_tests:
+              - accepted_values:
+                  values: ["ACTIVE", "RESTRICTED", "SUSPENDED", "DORMANT", "CLOSED"]
+          - name: account_status_reason
+            description: >
+              Cause of a non-ACTIVE status: APPROPRIATENESS_FAILED, VULNERABLE_CLIENT, KYC_EXPIRED,
+              CLIENT_REQUEST, NEGATIVE_BALANCE. Null while the account is ACTIVE.
           - name: acquisition_media_source
-            description: "Media source that acquired the user."
+            description: "Media source that acquired the client."
           - name: platform
             description: "Device platform: ios or android."
           - name: _loaded_at
             description: "Ingestion timestamp (freshness field)."
 
-      - name: bets
-        description: "One row per settled sports bet."
+      - name: trades
+        description: >
+          One row per trade. A trade is a position a client opened on an instrument and subsequently
+          closed, by instruction, by a stop or limit, or by margin close-out.
+        data_tests:
+          # Blocking: the window about to be built must contain data. The marts use
+          # insert_overwrite, so building an empty window would overwrite a good partition with
+          # nothing: silent data loss that source freshness cannot detect.
+          - rows_for_window:
+              date_column: closed_at
+              min_rows: 1
+          # Advisory: volume plausibility, measured against the source's own trailing average rather
+          # than a hand-set floor that would go stale. Warn, not fail, since a quiet day is not an outage.
+          - row_count_above_trailing_fraction:
+              date_column: closed_at
+              fraction: 0.4
+              lookback_days: 14
+              config:
+                severity: warn
         columns:
-          - name: bet_id
-            description: "Primary key for the bet."
+          - name: trade_id
+            description: "Primary key for the trade (one execution)."
             data_tests: [unique, not_null]
-          - name: user_id
-            description: "User who placed the bet."
+          - name: order_id
+            description: >
+              The order this execution filled against. An order fills in 0..n trades, so this is the
+              grain difference that makes partial fills visible.
             data_tests: [not_null]
-          - name: placed_at
-            description: "UTC timestamp the bet was placed."
+          - name: client_id
+            description: "Client who opened the trade."
             data_tests: [not_null]
-          - name: settled_at
-            description: "UTC timestamp the bet was settled."
-          - name: sport
-            description: "Sport/category the bet was on."
-          - name: stake
-            description: "Amount staked (bet volume contribution), in account currency."
+          - name: instrument_id
+            description: "instrument code for the market traded (e.g. EURUSD)."
             data_tests: [not_null]
-          - name: decimal_odds
-            description: "Decimal odds at which the bet was placed."
-          - name: status
-            description: "Settlement status: won, lost, void, or cashout."
+          - name: market_name
+            description: "Human-readable market name (e.g. 'EUR/USD', 'FTSE 100')."
+          - name: asset_class
+            description: "Asset class of the underlying."
             data_tests:
               - accepted_values:
-                  values: ["won", "lost", "void", "cashout"]
-          - name: payout
-            description: "Amount returned to the customer (0 for lost; stake for void)."
+                  values: ["FX", "INDICES", "SHARES", "COMMODITIES", "CRYPTO", "BONDS"]
+          - name: product_type
+            description: "CFD or SPREAD_BET. Determines tax treatment and how trade size is expressed."
+            data_tests:
+              - accepted_values:
+                  values: ["CFD", "SPREAD_BET"]
+          - name: direction
+            description: "BUY (long) or SELL (short)."
+            data_tests:
+              - accepted_values:
+                  values: ["BUY", "SELL"]
+          - name: opened_at
+            description: "UTC timestamp the position was opened."
+            data_tests: [not_null]
+          - name: closed_at
+            description: "UTC timestamp the position was closed; null while still open."
+          - name: status
+            description: "Trade lifecycle state."
+            data_tests:
+              - accepted_values:
+                  values: ["OPEN", "PART_CLOSED", "CLOSED", "STOPPED_OUT", "CANCELLED"]
+          - name: currency
+            description: "Account currency the trade settles in (ISO 4217)."
+          - name: quantity
+            description: >
+              Contracts for a CFD, or stake per point for a spread bet. Always positive; `direction`
+              carries the sign of the exposure.
+            data_tests: [not_null]
+          - name: opening_price
+            description: "Price of the underlying at open."
+          - name: closing_price
+            description: "Price of the underlying at close; null while still open."
+          - name: notional_value
+            description: "{{ doc('notional_volume') }}"
+          - name: client_pnl
+            description: "{{ doc('client_pnl') }}"
+          - name: spread_revenue
+            description: "Platform revenue from the dealing spread on this trade."
+          - name: commission
+            description: "Explicit commission charged (share CFDs); zero for most markets."
+          - name: funding_charge
+            description: "Overnight funding charged on the position, net across the days it was held."
           - name: _loaded_at
             description: "Ingestion timestamp (freshness field)."
 
-      - name: transactions
-        description: "One row per wallet transaction (deposit or withdrawal)."
+      - name: orders
+        description: >
+          One row per client instruction. An order is what the client asked for; a trade is what the
+          market gave them. The relationship is 1:0..n -- a working order may never fill, and a large
+          one commonly fills in several pieces at different prices.
+        columns:
+          - name: order_id
+            description: "Primary key for the order."
+            data_tests: [unique, not_null]
+          - name: client_id
+            description: "Client who placed the order."
+            data_tests: [not_null]
+          - name: instrument_id
+            description: "instrument code for the market."
+            data_tests: [not_null]
+          - name: side
+            description: "BUY or SELL."
+            data_tests:
+              - accepted_values:
+                  values: ["BUY", "SELL"]
+          - name: order_type
+            description: "MARKET, LIMIT or STOP. Determines whether the order can rest on the book."
+            data_tests:
+              - accepted_values:
+                  values: ["MARKET", "LIMIT", "STOP"]
+          - name: quantity
+            description: "Contracts (CFD) or stake per point (spread bet). Always positive."
+            data_tests: [not_null]
+          - name: limit_price
+            description: "Limit price; null unless order_type = LIMIT."
+          - name: stop_price
+            description: "Stop price; null unless order_type = STOP."
+          - name: status
+            description: "WORKING, PART_FILLED, FILLED, CANCELLED or REJECTED."
+            data_tests:
+              - accepted_values:
+                  values: ["WORKING", "PART_FILLED", "FILLED", "CANCELLED", "REJECTED"]
+          - name: placed_at
+            description: "UTC timestamp the order was placed."
+            data_tests: [not_null]
+          - name: currency
+            description: "Account currency (ISO 4217)."
+          - name: _loaded_at
+            description: "Ingestion timestamp (freshness field)."
+
+      - name: quotes
+        description: >
+          Sampled bid/ask ticks per instrument. Deliberately not tick-for-tick -- the full feed belongs
+          on the trading platform, not the warehouse. Retained because comparing a fill price against
+          the prevailing quote is how best execution is evidenced, which is a regulatory obligation.
+        columns:
+          - name: instrument_id
+            description: "instrument code."
+            data_tests: [not_null]
+          - name: quote_time
+            description: "UTC timestamp of the tick."
+            data_tests: [not_null]
+          - name: bid
+            description: "Best bid at the tick."
+          - name: ask
+            description: "Best ask at the tick."
+          - name: mid
+            description: "Mid price; (bid + ask) / 2."
+          - name: _loaded_at
+            description: "Ingestion timestamp (freshness field)."
+
+      - name: account_transactions
+        description: "One row per client money movement (deposit or withdrawal)."
+        data_tests:
+          - rows_for_window:
+              date_column: created_at
+              min_rows: 1
         columns:
           - name: transaction_id
             description: "Primary key for the transaction."
             data_tests: [unique, not_null]
-          - name: user_id
-            description: "User the transaction belongs to."
+          - name: client_id
+            description: "Client the transaction belongs to."
             data_tests: [not_null]
           - name: created_at
             description: "UTC timestamp the transaction was created."
@@ -112,9 +271,14 @@ sources:
             data_tests:
               - accepted_values:
                   values: ["deposit", "withdrawal"]
+          - name: currency
+            description: "Currency of the movement (ISO 4217)."
           - name: amount
             description: "Transaction amount in account currency (always positive)."
           - name: status
             description: "Transaction status: completed, pending, or failed."
+            data_tests:
+              - accepted_values:
+                  values: ["completed", "pending", "failed"]
           - name: _loaded_at
             description: "Ingestion timestamp (freshness field)."
