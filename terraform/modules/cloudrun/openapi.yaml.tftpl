@@ -1,0 +1,88 @@
+# OpenAPI spec consumed by API Gateway.
+#
+# The gateway does three jobs the service should not: it terminates the caller's auth scheme (an API
+# key a partner team can actually use, rather than a Google identity), it enforces quota, and it
+# presents a stable URL that survives the Cloud Run service being replaced. The service stays
+# unauthenticated-to-the-internet but non-public, invoked only by the gateway's identity.
+swagger: "2.0"
+info:
+  title: ${service_name}
+  description: Data contract registry for the GCP lakehouse.
+  version: "1.0.0"
+schemes:
+  - https
+produces:
+  - application/json
+
+securityDefinitions:
+  api_key:
+    type: apiKey
+    name: x-api-key
+    in: header
+
+security:
+  - api_key: []
+
+x-google-backend:
+  address: ${backend_url}
+  # The gateway mints an ID token for the backend, which is what allows Cloud Run to require
+  # authentication while the caller presents only an API key.
+  jwt_audience: ${backend_url}
+  protocol: h2
+
+paths:
+  /health:
+    get:
+      summary: Liveness probe
+      operationId: health
+      # No key required: a health check that needs a credential cannot be used by a health checker.
+      security: []
+      responses:
+        "200":
+          description: healthy
+
+  /contracts:
+    get:
+      summary: List all data contracts
+      operationId: listContracts
+      responses:
+        "200":
+          description: contract summaries
+
+  /contracts/{contract_id}:
+    get:
+      summary: Get one data contract
+      operationId: getContract
+      parameters:
+        - name: contract_id
+          in: path
+          required: true
+          type: string
+      responses:
+        "200":
+          description: the contract
+        "404":
+          description: no such contract
+
+  /contracts/{contract_id}/consumers:
+    get:
+      summary: Who consumes this dataset
+      operationId: getConsumers
+      parameters:
+        - name: contract_id
+          in: path
+          required: true
+          type: string
+      responses:
+        "200":
+          description: consumer list
+
+  /contracts/validate:
+    post:
+      summary: Validate a proposed contract against the registered one
+      operationId: validateContract
+      consumes:
+        - application/json
+      responses:
+        "200":
+          description: validation result
