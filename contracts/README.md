@@ -1,7 +1,7 @@
 # Data contracts
 
 A data contract is the **producer's promise about a dataset**, written down, versioned and enforced
-by CI. It is the JD's most-repeated theme, and the thing that makes self-service safe: a division
+by CI. It is what makes self-service safe: a team
 can build on Core Lake data precisely because someone has committed to what that data will look
 like tomorrow.
 

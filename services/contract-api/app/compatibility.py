@@ -158,7 +158,14 @@ def check_version_bump(current: dict[str, Any], proposed: dict[str, Any], violat
                 f"(currently {current.get('version')} -> {proposed.get('version')})",
             )
         )
-    elif not violations and (new_major, new_minor) <= (old_major, old_minor):
+    elif (
+        not violations
+        and current.get("schema") != proposed.get("schema")
+        and (new_major, new_minor) <= (old_major, old_minor)
+    ):
+        # A compatible schema change still has to move the version, or consumers cannot tell the
+        # difference between "new optional column" and "nothing happened". An unchanged contract is
+        # not a change, so it does not need a bump.
         problems.append(
             Violation("version_bump_required", None, f"schema changed but version did not advance from {current.get('version')}")
         )

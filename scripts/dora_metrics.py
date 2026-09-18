@@ -1,7 +1,6 @@
 """DORA-style engineering metrics from git history.
 
-The JD asks for "DORA-style engineering metrics" reported to the Head of Data Engineering and the
-CDO. This computes the four from git alone -- no external tooling, no instrumentation to install,
+The four metrics computed from git alone: no external tooling and no instrumentation to install,
 which is what makes it something a team will actually keep running.
 
     python scripts/dora_metrics.py --days 90

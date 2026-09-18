@@ -35,6 +35,17 @@ def rules(violations):
     return {v.rule for v in violations}
 
 
+def test_unchanged_contract_needs_no_version_bump():
+    """Re-running the gate on an untouched contract must not demand a bump."""
+    contract = {
+        "version": "1.0.0",
+        "schema": [{"name": "client_id", "type": "STRING", "required": True}],
+    }
+    violations = check_compatibility(contract, contract)
+    assert violations == []
+    assert check_version_bump(contract, contract, violations) == []
+
+
 def test_identical_contract_is_compatible():
     assert check_compatibility(BASE, copy.deepcopy(BASE)) == []
 
