@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import argparse
 import os
+import pathlib
+import sys
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
@@ -456,14 +458,92 @@ def build_frames(
     tx.insert(0, "transaction_id", [f"txn-{i:09d}" for i in range(len(tx))])
     tx["_loaded_at"] = loaded_at
 
+    # A queue of erasure requests, so the sweep and its tests have something real to run against.
+    # Two are outstanding, one of them old enough to be near the one-month deadline, and one was
+    # dealt with last week. The completed row is what proves the sweep does not process twice.
+    erased_sample = users["client_id"].iloc[[3, 11, 17]].tolist()
+    erasure_requests = pd.DataFrame(
+        {
+            "client_id": erased_sample,
+            "requested_at": [
+                end - timedelta(days=2),
+                end - timedelta(days=25),
+                end - timedelta(days=9),
+            ],
+            "completed_at": [pd.NaT, pd.NaT, end - timedelta(days=7)],
+            "rows_deleted": [None, None, 14],
+            "_loaded_at": loaded_at,
+        }
+    )
+
+    # The completed request is a past erasure, so the data really is gone: the client row and their
+    # attribution events. Their trades and account transactions stay, which is the retention
+    # obligation in privacy/erasure_targets.yaml, and is why the relationships tests on those tables
+    # allow an orphan for a subject under an erasure request.
+    already_erased = erased_sample[2]
+    users = users[users["client_id"] != already_erased].reset_index(drop=True)
+    events = events[events["client_id"] != already_erased].reset_index(drop=True)
+
     return {
         "appsflyer_events": events,
         "clients": users,
+        "erasure_requests": erasure_requests,
         "orders": orders,
         "trades": trades,
         "quotes": quotes,
         "account_transactions": tx,
     }
+
+
+# ---------------------------------------------------------------------------
+# Crypto shredding
+# ---------------------------------------------------------------------------
+def encrypt_pii(frames: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+    """Replace the personal columns with ciphertext, one key per client.
+
+    This is what a producer would do before the data ever reaches Kafka, so no plaintext exists
+    downstream to go looking for later. The wrapped keys come back as their own frame, written to a
+    separate schema that nothing else reads and that must be left out of every backup.
+
+    date_of_birth moves to its own column because it is a date, and a date column cannot hold
+    ciphertext without changing type on every model that reads it. The original is nulled rather
+    than dropped so the shape of the table, and every contract written against it, still holds.
+    """
+    # Run as a file rather than a module, so the repo root is not on the path by default.
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+    from privacy.crypto import encrypt_field, new_data_key, wrap
+
+    clients = frames["clients"].copy()
+    keys = {client_id: new_data_key() for client_id in clients["client_id"]}
+
+    clients["first_name"] = [
+        encrypt_field(v, keys[c]) for v, c in zip(clients["first_name"], clients["client_id"], strict=True)
+    ]
+    clients["last_name"] = [
+        encrypt_field(v, keys[c]) for v, c in zip(clients["last_name"], clients["client_id"], strict=True)
+    ]
+    # Deterministic for the email so a client's own rows still match each other, which is what the
+    # marketing join needs. Randomised for the names, where nothing downstream joins on the value.
+    clients["email"] = [
+        encrypt_field(v, keys[c], deterministic=True)
+        for v, c in zip(clients["email"], clients["client_id"], strict=True)
+    ]
+    clients["date_of_birth_encrypted"] = [
+        encrypt_field(v.isoformat() if v is not None else None, keys[c])
+        for v, c in zip(clients["date_of_birth"], clients["client_id"], strict=True)
+    ]
+    clients["date_of_birth"] = pd.NaT
+
+    frames = dict(frames)
+    frames["clients"] = clients
+    frames["privacy.subject_keys"] = pd.DataFrame(
+        {
+            "subject_id": list(keys),
+            "wrapped_key": [wrap(key) for key in keys.values()],
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+    return frames
 
 
 # ---------------------------------------------------------------------------
@@ -477,8 +557,11 @@ def write_duckdb(frames: dict[str, pd.DataFrame], path: str) -> None:
     try:
         con.execute("create schema if not exists raw")
         for name, df in frames.items():
+            schema, _, table = name.rpartition(".")
+            schema = schema or "raw"
+            con.execute(f"create schema if not exists {schema}")
             con.register("df_tmp", df)
-            con.execute(f"create or replace table raw.{name} as select * from df_tmp")
+            con.execute(f"create or replace table {schema}.{table} as select * from df_tmp")
             con.unregister("df_tmp")
     finally:
         con.close()
@@ -493,7 +576,15 @@ def write_bigquery(frames: dict[str, pd.DataFrame], project: str, dataset: str, 
     client.create_dataset(ds_ref, exists_ok=True)
     job_config = bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE")
     for name, df in frames.items():
-        table_id = f"{project}.{dataset}.{name}"
+        # A frame named schema.table goes to its own dataset. The key vault lives apart from the
+        # warehouse so it can be excluded from copies and exports without excluding anything else.
+        target_dataset, _, table = name.rpartition(".")
+        target_dataset = target_dataset or dataset
+        if target_dataset != dataset:
+            vault_ref = bigquery.Dataset(f"{project}.{target_dataset}")
+            vault_ref.location = location
+            client.create_dataset(vault_ref, exists_ok=True)
+        table_id = f"{project}.{target_dataset}.{table}"
         client.load_table_from_dataframe(df, table_id, job_config=job_config).result()
 
 
@@ -507,6 +598,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--days", type=int, default=90, help="history length ending at --end")
     p.add_argument("--end", default=None, help="ISO end date (default: now, UTC)")
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument(
+        "--encrypt-pii",
+        action="store_true",
+        help="write the personal columns as per-client ciphertext and emit the key vault "
+             "(off by default: the column masking demo needs readable values)",
+    )
     p.add_argument("--duckdb-path", default=os.environ.get("DUCKDB_PATH", "data/dev.duckdb"))
     p.add_argument("--gcp-project", default=os.environ.get("GCP_PROJECT"))
     p.add_argument("--bq-raw-dataset", default=os.environ.get("BQ_RAW_DATASET", "raw"))
@@ -524,6 +621,8 @@ def main() -> None:
     start = end - timedelta(days=args.days)
 
     frames = build_frames(args.clients, start, end, args.seed)
+    if args.encrypt_pii:
+        frames = encrypt_pii(frames)
     rows = {k: len(v) for k, v in frames.items()}
 
     if args.target == "duckdb":
@@ -538,7 +637,7 @@ def main() -> None:
     print(f"Wrote raw data to {args.target}: {dest}")
     print(f"  window: {start.date()} .. {end.date()} ({args.days} days), seed={args.seed}")
     for name, n in rows.items():
-        print(f"  raw.{name}: {n:,} rows")
+        print(f"  {name if '.' in name else f'raw.{name}'}: {n:,} rows")
 
 
 if __name__ == "__main__":

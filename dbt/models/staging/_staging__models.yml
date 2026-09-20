@@ -13,7 +13,9 @@ models:
       - name: client_id
         description: "Platform client id; null for pre-registration events."
         data_tests:
-          - relationships:
+          # Not the plain `relationships` test: a subject under an erasure request leaves
+          # stg_clients while these rows are retained. See the macro for why that is allowed.
+          - relationships_excluding_erased:
               to: ref('stg_clients')
               field: client_id
       - name: event_name
@@ -92,7 +94,9 @@ models:
         description: "Client who opened the trade."
         data_tests:
           - not_null
-          - relationships:
+          # Not the plain `relationships` test: a subject under an erasure request leaves
+          # stg_clients while these rows are retained. See the macro for why that is allowed.
+          - relationships_excluding_erased:
               to: ref('stg_clients')
               field: client_id
       - name: instrument_id
@@ -160,7 +164,9 @@ models:
         description: "Client who placed the order."
         data_tests:
           - not_null
-          - relationships:
+          # Not the plain `relationships` test: a subject under an erasure request leaves
+          # stg_clients while these rows are retained. See the macro for why that is allowed.
+          - relationships_excluding_erased:
               to: ref('stg_clients')
               field: client_id
       - name: instrument_id
@@ -204,7 +210,9 @@ models:
         description: "Client the transaction belongs to."
         data_tests:
           - not_null
-          - relationships:
+          # Not the plain `relationships` test: a subject under an erasure request leaves
+          # stg_clients while these rows are retained. See the macro for why that is allowed.
+          - relationships_excluding_erased:
               to: ref('stg_clients')
               field: client_id
       - name: created_at

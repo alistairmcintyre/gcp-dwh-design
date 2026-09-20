@@ -117,6 +117,21 @@ jobs:
         # bespoke ones.
         run: uv run --with pyyaml python streaming/generate_topic_jobs.py --check
 
+  privacy:
+    name: Erasure (crypto shredding + tombstones)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Erasure tests
+        run: uv run --with pytest --with pyyaml --with duckdb --with cryptography python -m pytest privacy/tests -q
+      - name: Every topic can satisfy an erasure request
+        # A topic that carries personal data with no workable erasure method is a deletion you
+        # cannot perform, and it stays invisible until somebody asks you to prove one.
+        run: uv run --with pyyaml --with duckdb --with cryptography python -m privacy.cli check-topics
+
   contracts:
     name: Data contract compatibility
     runs-on: ubuntu-latest

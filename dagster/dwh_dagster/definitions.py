@@ -11,6 +11,7 @@ from dagster_dbt import DbtCliResource
 from .dbt_assets import dwh_dbt_assets
 from .gates import build_raw_freshness_checks, raw_partitions_ready_sensor
 from .jobs import full_refresh_job, incremental_dbt_job, source_freshness_job
+from .privacy_jobs import daily_erasure_schedule, gdpr_erasure_job
 from .project import DBT_PROFILES_DIR, DBT_TARGET, dbt_project
 from .raw_data import raw_data
 from .schedules import daily_incremental_schedule, source_freshness_schedule
@@ -37,8 +38,8 @@ asset_checks = list(build_raw_freshness_checks()) if DBT_TARGET == "dev" else []
 defs = Definitions(
     assets=assets,
     asset_checks=asset_checks,
-    jobs=[incremental_dbt_job, full_refresh_job, source_freshness_job],
-    schedules=[daily_incremental_schedule, source_freshness_schedule],
+    jobs=[incremental_dbt_job, full_refresh_job, source_freshness_job, gdpr_erasure_job],
+    schedules=[daily_incremental_schedule, source_freshness_schedule, daily_erasure_schedule],
     sensors=sensors,
     resources={"dbt": dbt_resource},
 )

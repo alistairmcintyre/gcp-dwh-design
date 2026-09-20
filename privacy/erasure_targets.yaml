@@ -1,0 +1,86 @@
+# Every place a data subject appears, and what happens to it on an erasure request.
+#
+# This file is the answer to the question that sinks most erasure processes: "are you sure that is
+# all of it?" A grep of the warehouse at request time is not an answer, because it finds what exists
+# today and nothing about the table someone adds next month. A reviewed inventory is, and it lives
+# next to the pipelines so adding a table that carries client_id and forgetting this file shows up in
+# code review rather than in a regulator's question.
+#
+# Three actions, and the difference between them is legal, not technical:
+#
+#   delete  the row exists only because the person does, so it goes. Hard DELETE, no soft flag.
+#   shred   the row must survive but the identity attached to it must not. Destroying the subject's
+#           data key makes the encrypted columns unreadable; no DML runs against the table at all,
+#           which is what makes this work for immutable storage.
+#   retain  the row stays readable under a lawful basis that survives an erasure request, normally
+#           Article 17(3)(b), a legal obligation. Every retain entry names that basis and an expiry,
+#           because "we might need it" is not one.
+
+subject_key: client_id
+
+targets:
+  # ---- Bronze -----------------------------------------------------------------------------------
+  - table: raw.clients
+    action: delete
+    note: The row is the person. Nothing here survives the request.
+
+  - table: raw.appsflyer_events
+    action: delete
+    key_column: client_id
+    note: >
+      Attribution events carry a device id and an IP-derived country, both personal data in their own
+      right, so the rows go rather than being shredded.
+
+  - table: raw.orders
+    action: retain
+    lawful_basis: Article 17(3)(b), transaction record-keeping obligation
+    retain_until: 7 years after the order date
+    note: >
+      An order is a financial record and the obligation to keep it outlives the erasure request. What
+      does not survive is the link to a named person: the identity columns live in raw.clients, which
+      is deleted, and client_id is a pseudonymous key whose mapping to a person is gone with it.
+
+  - table: raw.trades
+    action: retain
+    lawful_basis: Article 17(3)(b), transaction record-keeping obligation
+    retain_until: 7 years after the trade date
+
+  - table: raw.account_transactions
+    action: retain
+    lawful_basis: Article 17(3)(b), anti-money-laundering record-keeping
+    retain_until: 5 years after the transaction date
+
+  - table: raw.quotes
+    action: none
+    note: Market data, no subject. Listed so its absence from the sweep is a decision, not an oversight.
+
+  # ---- Silver -----------------------------------------------------------------------------------
+  # staging models are views, so there is nothing stored to delete. They are listed because a future
+  # change to a table materialisation would silently create a copy of erased data.
+  - table: staging.stg_clients
+    action: none
+    note: View. If this ever becomes a table, it becomes a delete target.
+
+  # ---- Gold -------------------------------------------------------------------------------------
+  - table: marts.dim_client
+    action: delete
+
+  - table: marts.fct_client_activity
+    action: delete
+    note: >
+      Daily rows at client grain. Deleting them changes historical totals, which finance will notice,
+      so the aggregate they report from is rebuilt from what remains rather than restated quietly.
+
+  - table: marts.fct_acquisition_events
+    action: none
+    note: >
+      Aggregated to channel and day with no client column, and every group holds many people, so no
+      individual can be singled out. Counts do shift when the underlying rows go.
+
+  - table: features.feat_client_activity
+    action: delete
+    note: >
+      Feature rows for a model. Deleting the row stops future inference on the person, but a model
+      already trained on it has not forgotten, which is a separate and much harder problem. The
+      practical answer is a retraining cadence that ages out erased subjects, recorded here so the
+      gap is visible.

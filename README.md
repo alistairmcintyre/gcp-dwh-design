@@ -28,6 +28,7 @@ docker compose --profile airflow up --build     # Airflow 3 UI -> http://localho
 | **Governance** (`terraform/`, [`docs/governance.md`](docs/governance.md)) | Dataplex taxonomy and policy tags, dynamic data masking, row access policies, per-persona IAM, all in Terraform, applied to a real project and checked by impersonating each persona |
 | **Modelling for many teams** ([`docs/modelling-across-sectors.md`](docs/modelling-across-sectors.md)) | dbt groups and access, so one project serves Finance, Compliance, Marketing and Risk without them treading on each other, plus how the build is ordered |
 | **Schema evolution** (`beam/`) | a Beam pipeline and load tests measuring what BigQuery's Storage Write API does when a producer adds a field, including a run on real Dataflow |
+| **Erasure requests** (`privacy/`, [`docs/gdpr-erasure.md`](docs/gdpr-erasure.md)) | crypto shredding and Kafka tombstones: per-subject keys, an inventory of every place a subject appears, a sweep that deletes and proves it, and a dbt test that fails if an erased client comes back |
 | **Orchestration, Airflow** (`airflow/`) | dbt baked into a container image and run by Composer through KubernetesPodOperator, with a Slack alert on failure |
 | **Orchestration, Dagster** (`dagster/`) | the same dbt project as software-defined assets, dbt tests as asset checks, daily partitions, schedules, failure sensors |
 | **Spark framework** (`spark/`) | config-driven ETL for Dataproc Serverless: one image, N pipelines from YAML, with a quality gate before the write |
@@ -159,6 +160,37 @@ traffic flowing, lost nothing. The same setup on deployed Dataflow behaved the s
 including the check that finds blanked values and the job that backfills them from the raw table, are
 in [`beam/README.md`](beam/README.md).
 
+## Erasure requests
+
+"Delete everything you hold about me" is easy to say and hard to carry out, because the data has been
+copied: into Kafka logs, Bronze, models built on Bronze, feature tables, backups, and sometimes out
+to a third party. Two mechanisms do the work, and they cover different things.
+
+**Kafka tombstones** clear the log. A record with the subject's key and a null value on a compacted
+topic removes their history and tells every consumer to delete their copy. It only works where the
+topic is keyed by the subject and compacted, and the timing has to be pinned: compaction waits for
+closed segments, so on a quiet topic a tombstone can sit unapplied for weeks. Each topic declares
+its method in `streaming/topics.yaml` and CI rejects one that cannot deliver what it claims.
+
+**Crypto shredding** covers what cannot be rewritten. Each subject's personal fields are encrypted
+with their own key before they reach Kafka, so erasing is destroying the key: backups, partner
+extracts and records kept under a legal obligation all stop meaning anything at once. A trade has to
+survive for record-keeping; the name attached to it does not.
+
+```bash
+uv run python -m privacy.cli sweep --dry-run   # what the queue would touch
+make erasure-sweep                             # process it, then prove it
+make erasure-check                             # every topic can satisfy a request
+make erasure-deadlines                         # how long each open request has waited
+```
+
+The sweep destroys the key first (if it dies halfway, the subject is already unreadable), deletes
+every row the inventory in `privacy/erasure_targets.yaml` marks `delete`, tombstones the keyed
+topics, then re-queries to prove nothing is left. Meanwhile `stg_clients` drops the subject on the
+next build, which is Article 18 restriction of processing and takes minutes rather than waiting for
+the sweep. What it cannot do, including trained models and the pseudonymisation argument, is written
+down in [`docs/gdpr-erasure.md`](docs/gdpr-erasure.md).
+
 ## Orchestration: two ways
 
 Both run the same dbt project. dbt is the portable core and the orchestrator is a swappable layer.
@@ -225,7 +257,8 @@ make clean     # remove the DuckDB file and dbt artefacts
 
 Cloud and component targets: `governance-apply`, `governance-build`, `governance-validate`,
 `dq-report`, `bq-data`, `verify-cloud`, `spark-test`, `spark-validate`, `topics-check`,
-`contracts-check`, `metrics`.
+`contracts-check`, `privacy-test`, `erasure-check`, `erasure-deadlines`, `erasure-sweep`,
+`metrics`.
 
 ## Layout
 
@@ -234,11 +267,12 @@ dbt/                     the dbt project (models, seeds, macros, tests)
 terraform/               modules (governance, bigquery, dataplex_quality, dataproc, cloudrun,
                          monitoring, access_personas) and the dev environment root
 beam/                    Beam/Dataflow schema-evolution module and its load tests
+privacy/                 erasure: per-subject key vault, crypto shredding, tombstones, the sweep
 spark/                   config-driven Dataproc Serverless ETL framework, job specs, tests
 streaming/               Kafka topic registry and the Bronze offload job generator
 contracts/               data contracts (owner, SLO, PII classification, consumers)
 services/contract-api/   FastAPI contract registry for Cloud Run, behind API Gateway
-docs/                    the governance write-up and the cross-team modelling design
+docs/                    governance, cross-team modelling, and the erasure design
 scripts/                 synthetic data generator, governance validation, metrics
 airflow/                 dbt image, KubernetesPodOperator wrapper, Composer DAGs, local demo DAG
 dagster/                 Dagster code location (assets, checks, partitions, jobs, schedules, sensors)
@@ -250,5 +284,6 @@ tests/                   DAG integrity and compile checks
 ## CI
 
 GitHub Actions runs SQLFluff, `dbt build` on DuckDB, DAG integrity, `terraform fmt` and `validate`,
-the Spark tests, the topic registry staleness check and contract compatibility. pre-commit runs the
+the Spark tests, the topic registry staleness check, contract compatibility, and the erasure tests
+plus the check that every topic can satisfy an erasure request. pre-commit runs the
 fast subset locally.

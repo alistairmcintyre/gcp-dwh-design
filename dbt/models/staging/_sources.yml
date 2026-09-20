@@ -57,6 +57,24 @@ sources:
           - name: _loaded_at
             description: "Ingestion timestamp (freshness field)."
 
+      - name: erasure_requests
+        description: >
+          GDPR erasure queue, one row per request. Written by whichever system takes the request
+          (support desk, privacy portal) and completed by the sweep in privacy/erasure.py. Staging
+          reads it to stop processing a client immediately, which is a separate obligation from
+          deleting their rows and happens far sooner.
+        columns:
+          - name: client_id
+            description: "The data subject, as identified on the request."
+          - name: requested_at
+            description: >
+              When the request was received. The one-month deadline in Article 12(3) runs from here,
+              not from when the sweep first noticed it.
+          - name: completed_at
+            description: "Null until the sweep has shredded the key and deleted the rows."
+          - name: rows_deleted
+            description: "How many rows the sweep removed, kept as evidence the request was carried out."
+
       - name: clients
         description: "One row per registered client."
         columns:

@@ -13,7 +13,8 @@ endif
 
 .PHONY: help install data deps build build-full run test seed docs freshness lint fix dag-test verify clean \
         governance-apply governance-build governance-validate governance-plan governance-destroy \
-        dq-report contracts-check spark-test spark-validate topics-check metrics bq-data verify-cloud
+        dq-report contracts-check spark-test spark-validate topics-check metrics bq-data verify-cloud \
+        privacy-test erasure-check erasure-deadlines erasure-sweep
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -130,6 +131,19 @@ topics-check: ## Fail if the generated Kafka offload jobs are stale vs the topic
 
 contracts-check: ## Run the data contract compatibility tests
 	cd services/contract-api && uv run --with pytest --with pyyaml --with fastapi --with httpx python -m pytest tests -q
+
+privacy-test: ## Run the erasure and crypto shredding tests
+	uv run python -m pytest privacy/tests -q
+
+erasure-check: ## Every topic can satisfy an erasure request (CI gate)
+	uv run python -m privacy.cli check-topics
+
+erasure-deadlines: ## Age of every open request; non-zero exit while one still needs action
+	uv run python -m privacy.cli deadlines --warn-days 21
+
+erasure-sweep: ## Process pending erasure requests (DRY_RUN=1 to see it without doing it)
+	uv run python -m privacy.cli sweep $(if $(DRY_RUN),--dry-run,)
+	uv run python -m privacy.cli verify-all
 
 metrics: ## DORA-style engineering metrics from git history
 	uv run python scripts/dora_metrics.py --days 90

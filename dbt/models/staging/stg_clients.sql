@@ -1,5 +1,19 @@
 with source as (
     select * from {{ source('raw', 'clients') }}
+),
+
+-- Restriction of processing, Article 18. A client who has asked to be erased drops out of every
+-- model on the next build, which is minutes, rather than waiting for the erasure sweep to delete
+-- the underlying rows. The two run at different speeds on purpose: stopping the processing is
+-- cheap and immediate, deleting from every layer and tombstoning the topics is neither.
+erasure_requested as (
+    select client_id from {{ source('raw', 'erasure_requests') }}
+),
+
+retained as (
+    select source.*
+    from source
+    where source.client_id not in (select erasure_requested.client_id from erasure_requested)
 )
 
 select
@@ -27,4 +41,4 @@ select
     acquisition_media_source as media_source,
     platform,
     _loaded_at as loaded_at
-from source
+from retained

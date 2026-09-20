@@ -85,6 +85,68 @@ def validate(topics: list[dict]) -> None:
             raise RegistryError(f"{name}: freshness_slo_minutes must be a positive integer")
 
 
+def _tombstoned(topic: dict) -> bool:
+    """Whether erasure reaches this topic as a null-valued record."""
+    return topic.get("erasure") == "tombstone"
+
+
+def _transforms(topic: dict) -> list[dict]:
+    """Dedupe and stamp. Tombstoned topics get a delete marker first.
+
+    A tombstone arrives with the key populated and every value column null, which is why the
+    connector runs with behavior.on.null.values=write rather than skipping them: a skipped tombstone
+    erases the topic and leaves the warehouse untouched. Bronze keeps the marker rather than applying
+    it, because Bronze is a record of what arrived; Silver decides what the current state is.
+    """
+    stamp = {
+        "_ingested_at": "current_timestamp()",
+        "event_date": "cast(event_timestamp as date)",
+        "_kafka_offset": "kafka_offset",
+        "_kafka_partition": "kafka_partition",
+    }
+    dedupe_on = list(topic["order_by"])
+
+    if _tombstoned(topic):
+        stamp["_is_delete"] = f"{topic['dedupe_key'][0]} is null"
+        # A tombstone carries no event time, so ordering falls back to when the broker took it.
+        # Without this the delete sorts unpredictably against the record it is meant to supersede.
+        stamp["_event_time"] = "coalesce(event_timestamp, kafka_timestamp)"
+        stamp["event_date"] = "cast(coalesce(event_timestamp, kafka_timestamp) as date)"
+        dedupe_on = ["_event_time"]
+
+    transforms = [{"type": "with_columns", "columns": stamp}] if _tombstoned(topic) else []
+    transforms.append({
+        "type": "deduplicate",
+        # Tombstones share the subject key, not the event key, so a compacted topic dedupes on the
+        # key the log itself is compacted by.
+        "keys": [topic["key"]] if _tombstoned(topic) else list(topic["dedupe_key"]),
+        "order_by": dedupe_on,
+        "descending": True,
+    })
+    if not _tombstoned(topic):
+        transforms.append({"type": "with_columns", "columns": stamp})
+    return transforms
+
+
+def _quality(topic: dict) -> list[dict]:
+    """The gate before the write. Delete markers are exempt from the rules about payload contents."""
+    exempt = " or _is_delete" if _tombstoned(topic) else ""
+    key_column = topic["key"] if _tombstoned(topic) else topic["dedupe_key"][0]
+    return [
+        {"name": "key_present", "expression": f"{key_column} is not null", "on_failure": "fail"},
+        {
+            "name": "event_timestamp_present",
+            "expression": f"event_timestamp is not null{exempt}",
+            "on_failure": "fail",
+        },
+        {
+            "name": "event_timestamp_not_in_future",
+            "expression": f"event_timestamp <= current_timestamp() + interval 1 hour{exempt}",
+            "on_failure": "warn",
+        },
+    ]
+
+
 def build_job_spec(topic: dict) -> dict:
     """Render one topic into the Spark framework's job-spec shape."""
     return {
@@ -104,34 +166,8 @@ def build_job_spec(topic: dict) -> dict:
                 },
             }
         ],
-        "transforms": [
-            # At-least-once delivery plus per-partition-only ordering: dedupe on the business key,
-            # keeping the latest by event time.
-            {
-                "type": "deduplicate",
-                "keys": list(topic["dedupe_key"]),
-                "order_by": list(topic["order_by"]),
-                "descending": True,
-            },
-            {
-                "type": "with_columns",
-                "columns": {
-                    "_ingested_at": "current_timestamp()",
-                    "event_date": "cast(event_timestamp as date)",
-                    "_kafka_offset": "kafka_offset",
-                    "_kafka_partition": "kafka_partition",
-                },
-            },
-        ],
-        "quality": [
-            {"name": "key_present", "expression": f"{topic['dedupe_key'][0]} is not null", "on_failure": "fail"},
-            {"name": "event_timestamp_present", "expression": "event_timestamp is not null", "on_failure": "fail"},
-            {
-                "name": "event_timestamp_not_in_future",
-                "expression": "event_timestamp <= current_timestamp() + interval 1 hour",
-                "on_failure": "warn",
-            },
-        ],
+        "transforms": _transforms(topic),
+        "quality": _quality(topic),
         "sink": {
             "format": "bigquery",
             "mode": "overwrite",

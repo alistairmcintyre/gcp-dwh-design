@@ -76,7 +76,9 @@ models:
         constraints: [{ type: not_null }]
         data_tests:
           - not_null
-          - relationships:
+          # A Gold row for a client under an erasure request outlives their staging row: processing
+          # stops at once, the rows go when the sweep runs. Both states are legitimate.
+          - relationships_excluding_erased:
               to: ref('stg_clients')
               field: client_id
       - name: acquisition_channel

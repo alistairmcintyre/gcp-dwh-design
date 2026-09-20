@@ -37,6 +37,49 @@ _DBT_POD_ENV = {
 }
 
 
+def pod_task(
+    *,
+    task_id: str,
+    arguments: list[str] | None = None,
+    command: list[str] | None = None,
+    name_prefix: str = "job",
+    extra_env: dict[str, str] | None = None,
+    cpu: str = "1",
+    memory: str = "2Gi",
+    **kwargs,
+) -> KubernetesPodOperator:
+    """A pod running the project image, with the same auth and cleanup rules as the dbt tasks.
+
+    The dbt image already carries the project, so anything else the platform needs to run on a
+    schedule (the erasure sweep, a backfill utility) runs here rather than on the scheduler. Nothing
+    extra gets installed on Composer, and the workload keeps using Workload Identity for GCP auth.
+    """
+    resources = k8s.V1ResourceRequirements(
+        requests={"cpu": "500m", "memory": "1Gi"},
+        limits={"cpu": cpu, "memory": memory},
+    )
+    env = dict(_DBT_POD_ENV)
+    env.update(extra_env or {})
+    return KubernetesPodOperator(
+        task_id=task_id,
+        name=f"{name_prefix}-" + task_id.replace("_", "-"),
+        namespace=NAMESPACE,
+        kubernetes_conn_id=KUBE_CONN_ID,
+        image=DBT_IMAGE,
+        cmds=command,
+        arguments=arguments,
+        env_vars=[k8s.V1EnvVar(name=k, value=v) for k, v in env.items()],
+        service_account_name=SERVICE_ACCOUNT,
+        container_resources=resources,
+        get_logs=True,
+        log_events_on_failure=True,
+        on_finish_action="delete_pod",  # clean up the pod once it finishes
+        reattach_on_restart=False,
+        startup_timeout_seconds=600,
+        **kwargs,
+    )
+
+
 def dbt_task(
     *,
     task_id: str,
@@ -49,24 +92,11 @@ def dbt_task(
 
     ``dbt_args`` is an Airflow-templated field, so you can pass ``--vars`` with ``{{ data_interval_* }}``.
     """
-    resources = k8s.V1ResourceRequirements(
-        requests={"cpu": "500m", "memory": "1Gi"},
-        limits={"cpu": cpu, "memory": memory},
-    )
-    return KubernetesPodOperator(
+    return pod_task(
         task_id=task_id,
-        name="dbt-" + task_id.replace("_", "-"),
-        namespace=NAMESPACE,
-        kubernetes_conn_id=KUBE_CONN_ID,
-        image=DBT_IMAGE,
         arguments=dbt_args,
-        env_vars=[k8s.V1EnvVar(name=k, value=v) for k, v in _DBT_POD_ENV.items()],
-        service_account_name=SERVICE_ACCOUNT,
-        container_resources=resources,
-        get_logs=True,
-        log_events_on_failure=True,
-        on_finish_action="delete_pod",  # clean up the pod once it finishes
-        reattach_on_restart=False,
-        startup_timeout_seconds=600,
+        name_prefix="dbt",
+        cpu=cpu,
+        memory=memory,
         **kwargs,
     )

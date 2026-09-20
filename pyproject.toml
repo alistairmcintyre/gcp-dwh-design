@@ -11,6 +11,7 @@ dependencies = []
 # gets its own environment from a requirements file (airflow/docker/, dagster/requirements.txt).
 [dependency-groups]
 dev = [
+    "cryptography>=43",
     "dbt-core>=1.10,<1.11",
     "dbt-duckdb>=1.10,<1.11",
     "dbt-bigquery>=1.10,<1.11",
@@ -27,7 +28,7 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["scripts", "tests"]
+src = ["scripts", "tests", "privacy"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

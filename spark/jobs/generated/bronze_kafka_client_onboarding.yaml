@@ -9,27 +9,29 @@ sources:
     format: avro
     path: gs://${LANDING_BUCKET}/kafka/client.onboarding.v2/dt=${execution_date}/*
 transforms:
-- type: deduplicate
-  keys:
-  - event_id
-  order_by:
-  - event_timestamp
-  descending: true
 - type: with_columns
   columns:
     _ingested_at: current_timestamp()
-    event_date: cast(event_timestamp as date)
+    event_date: cast(coalesce(event_timestamp, kafka_timestamp) as date)
     _kafka_offset: kafka_offset
     _kafka_partition: kafka_partition
+    _is_delete: event_id is null
+    _event_time: coalesce(event_timestamp, kafka_timestamp)
+- type: deduplicate
+  keys:
+  - client_id
+  order_by:
+  - _event_time
+  descending: true
 quality:
 - name: key_present
-  expression: event_id is not null
+  expression: client_id is not null
   on_failure: fail
 - name: event_timestamp_present
-  expression: event_timestamp is not null
+  expression: event_timestamp is not null or _is_delete
   on_failure: fail
 - name: event_timestamp_not_in_future
-  expression: event_timestamp <= current_timestamp() + interval 1 hour
+  expression: event_timestamp <= current_timestamp() + interval 1 hour or _is_delete
   on_failure: warn
 sink:
   format: bigquery

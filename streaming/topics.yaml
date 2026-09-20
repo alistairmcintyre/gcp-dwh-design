@@ -13,6 +13,20 @@
 #
 # Each entry is also the DATA CONTRACT for that topic: schema reference, ownership, delivery
 # semantics, PII classification and freshness SLO in one reviewable place.
+#
+# ERASURE. Every topic says how a GDPR erasure request reaches it, because that cannot be worked out
+# later from the outside:
+#
+#   tombstone     keyed by the subject and compacted, so a null-valued record for that key removes
+#                 the history and tells every consumer to delete their copy.
+#   retain        a record the business is obliged to keep. Names the lawful basis and the period.
+#   none          no subject in the topic at all.
+#
+#   encrypt_pii   set wherever pii fields are declared. The producer encrypts those fields with the
+#                 subject's own key, so destroying the key neutralises every copy that tombstoning
+#                 cannot reach: backups, partner extracts, and segments still inside retention.
+#
+# privacy/tombstones.py checks these rules in CI. subject_key for this estate is client_id.
 
 defaults: &defaults
   # Schemas live in the registry, not here. Pinning a subject rather than inlining the schema is
@@ -49,6 +63,14 @@ topics:
       last_name: person_name
       date_of_birth: date_of_birth
       email: contact
+    encrypt_pii: true
+    erasure: tombstone
+    # compact, not compact+delete: one record per client is the whole point of the topic, and a
+    # time-based delete would drop registrations that are still the current state.
+    cleanup_policy: compact
+    # Pinned rather than inherited. Cluster defaults wait until half the log is uncompacted, which on
+    # a 40k-a-day topic can leave a tombstone unapplied for weeks and blow the one-month deadline.
+    max_compaction_delay_hours: 24
     freshness_slo_minutes: 15
     volume_per_day: 40000
 
@@ -62,6 +84,11 @@ topics:
     subject: client.status.v1-value
     key: client_id
     bronze_table: kafka_client_status
+    erasure: tombstone
+    # compact AND delete: compaction is what makes erasure work, the time limit is what stops a
+    # closed account's status history living forever.
+    cleanup_policy: compact,delete
+    max_compaction_delay_hours: 24
     dedupe_key: [event_id]
     order_by: [event_timestamp]
     pii: {}
@@ -83,6 +110,11 @@ topics:
     subject: account.transaction.v3-value
     key: transaction_id
     bronze_table: kafka_account_transaction
+    # Keyed by the transaction, so a tombstone cannot target a person even in principle. Money
+    # movements are kept under an AML obligation that outlives an erasure request; what goes is the
+    # identity they point at, held in the client topics above.
+    erasure: retain
+    lawful_basis: Article 17(3)(b), anti-money-laundering record-keeping, 5 years
     dedupe_key: [transaction_id]
     order_by: [event_timestamp, kafka_offset]
     pii: {}
@@ -97,6 +129,11 @@ topics:
     subject: marketing.preferences.v1-value
     key: client_id
     bronze_table: kafka_marketing_preferences
+    erasure: tombstone
+    cleanup_policy: compact
+    # Six hours, not twenty-four. A withdrawn consent that is still live in a downstream audience is
+    # a live marketing send to someone who asked you to stop.
+    max_compaction_delay_hours: 6
     # Preference events arrive unordered across partitions and the LATEST state is what matters --
     # applying an older opt-out after a newer opt-in would re-consent someone who opted out, which
     # is both a GDPR problem and the kind of bug that reaches a regulator rather than a backlog.
@@ -118,6 +155,8 @@ topics:
     subject: order.lifecycle.v1-value
     key: order_id
     bronze_table: kafka_order_lifecycle
+    erasure: retain
+    lawful_basis: Article 17(3)(b), transaction record-keeping, 7 years
     dedupe_key: [order_id, event_seq]
     order_by: [event_timestamp, kafka_offset]
     pii: {}
@@ -135,6 +174,8 @@ topics:
     subject: trade.execution.v2-value
     key: trade_id
     bronze_table: kafka_trade_execution
+    erasure: retain
+    lawful_basis: Article 17(3)(b), transaction record-keeping, 7 years
     # Keyed by trade_id, ordered by the platform's monotonic sequence within the trade. An event-time
     # tie is real at this volume, so kafka_offset breaks it -- it is the only total order available
     # inside a partition.
@@ -154,6 +195,8 @@ topics:
     subject: market.price.v1-value
     key: instrument_id
     bronze_table: kafka_market_price
+    # Instrument prices, no subject anywhere in the topic.
+    erasure: none
     dedupe_key: [instrument_id, event_timestamp]
     order_by: [event_timestamp, kafka_offset]
     pii: {}
