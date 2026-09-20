@@ -102,6 +102,24 @@ shred leaves readable data with the key still sitting there.
 | Key vault | Key row deleted, audit row written with no personal data in it | `privacy/vault.py` |
 | Orchestration | Daily, both stacks | `airflow/dags/gdpr_erasure_dag.py`, `dagster/dwh_dagster/privacy_jobs.py` |
 
+## Deleting from Gold is not enough on its own
+
+The one that caught me, and it only showed up on a from-scratch build in CI.
+
+Trades and account transactions are retained under a record-keeping obligation, so they keep the
+erased client's rows. The daily activity fact is derived from those retained records and left-joins
+the client dimension for attributes. So the sweep deleted the Gold rows, and the very next full
+build rebuilt them straight out of the retained trades, with null attributes where the client used
+to be. An incremental build hid it locally, because the deleted history was outside the window.
+
+Erasure therefore has to be applied wherever client-grain rows are **derived**, not only where the
+client is stored. The filter now sits in `int_client_daily_activity`, so everything downstream
+inherits it. The retention obligation covers the transaction record; it does not license rebuilding
+a per-client activity profile from it the next morning.
+
+Worth knowing because the same shape appears anywhere a fact outlives its dimension: a warehouse that
+can rebuild a person from what it is allowed to keep has not really erased them.
+
 ## The inventory is the real artefact
 
 `privacy/erasure_targets.yaml` lists every place a subject appears and what happens to it. It exists

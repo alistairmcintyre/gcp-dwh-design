@@ -50,6 +50,23 @@ combined as (
         on
             d.client_id = t.client_id
             and d.activity_date = t.activity_date
+),
+
+-- Erasure has to be applied here, not only in stg_clients.
+--
+-- Trades and account transactions are retained under a record-keeping obligation, so they still hold
+-- the erased client's rows. Without this filter the next full build reconstructs that client's daily
+-- activity straight out of the retained records, and the sweep's deletion of the Gold rows is
+-- undone by the following build. The retention obligation covers the transaction record; it does not
+-- license rebuilding a per-client activity profile from it.
+erasure_requested as (
+    select client_id from {{ source('raw', 'erasure_requests') }}
+),
+
+retained as (
+    select combined.*
+    from combined
+    where combined.client_id not in (select erasure_requested.client_id from erasure_requested)
 )
 
 select
@@ -65,4 +82,4 @@ select
     deposit_amount,
     withdrawal_amount,
     deposit_amount - withdrawal_amount as net_deposit
-from combined
+from retained
