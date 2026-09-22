@@ -12,6 +12,7 @@ that don't are marked.
 6. [Kafka ingestion](#6-kafka-ingestion)
 7. [Spark or dbt](#7-spark-or-dbt)
 8. [Data contracts](#8-data-contracts)
+9. [Lineage](#9-lineage)
 
 ---
 
@@ -351,4 +352,115 @@ commission passes every automated check and quietly restates revenue.
 | contract to dbt | the contract is mirrored as dbt `contract: {enforced: true}` plus tests | a build that produces something the contract doesn't describe |
 | CI | a compatibility check against the version on `main` | a breaking change merged without a major version bump |
 | runtime | Dataplex scans and freshness checks against the stated SLOs | a contract met on paper and broken in production |
+
+---
+
+## 9. Lineage
+
+Code: [`lineage/`](../lineage), plus the Spark and Airflow wiring below.
+
+Lineage works when it's a by-product of running the pipelines, recorded by the engines themselves.
+It fails when it's a documentation project, because a hand-drawn graph is out of date by the next
+release. And it's only worth having if it answers a question someone actually asks.
+
+### What is it for?
+
+```
+"What breaks if I change this column?" ....... column-level lineage, recorded automatically
+"Where did this number come from?" ........... run-level lineage: which job, which run, which inputs
+"Who owns this, and what does it mean?" ...... a catalog and glossary, curated by people
+```
+
+The first two are technical and should cost nobody any effort. The third is governance work, and
+it's where tools like Collibra sit: stewardship workflows, glossaries and approvals, built for
+governance teams, with technical lineage harvested in from outside. Pick that tool after the
+technical lineage exists, not instead of it.
+
+### On GCP
+
+Knowledge Catalog, which was Dataplex Universal Catalog until 10 April 2026. The API, CLI and IAM
+names didn't change.
+
+```
+BigQuery, including everything dbt runs .......... automatic, table and column level
+Managed Service for Apache Spark (Dataproc) ...... spark.dataproc.lineage.enabled=true on the batch
+Managed Service for Apache Airflow (Composer) .... turn on its lineage integration
+Dataflow, Data Fusion, Iceberg REST catalog
+  tables, Vertex AI pipelines .................... automatic
+anything else ................................... send OpenLineage events to its API
+```
+
+| Limit | What it means |
+|---|---|
+| lineage is kept for **30 days** | fine for "what breaks", not an audit history; keep your own copy of the events if you need one |
+| no column lineage for BigQuery load jobs or routines | a stored procedure is a gap in the graph |
+| no column lineage when one job creates over 1,500 column links | very wide tables drop to table level |
+| top-level columns only | fields inside a STRUCT aren't traced |
+| no CMEK for the lineage metadata | matters where every store must use your own keys |
+
+### On AWS
+
+Amazon SageMaker Catalog, in SageMaker Unified Studio and built on DataZone. Lineage has been GA
+since December 2024 and is based on OpenLineage.
+
+```
+AWS Glue and Amazon Redshift ...... captured automatically
+Spark on EMR ...................... OpenLineage libraries built in
+Airflow (MWAA), dbt, anything else  OpenLineage events, sent with the amazon_datazone transport
+```
+
+### Across clouds, or open source
+
+```
+Everything on one cloud? ..... that cloud's catalog is enough
+Two clouds, or on-prem too? .. each native tool stops at its own edge, so send OpenLineage from
+                               everything to one backend. Which backend is then just config:
+                                 gcplineage       Knowledge Catalog
+                                 amazon_datazone  SageMaker Catalog
+                                 http             Marquez, DataHub, OpenMetadata
+                                 composite        several of these at once
+```
+
+| Tool | Good at | Watch out for |
+|---|---|---|
+| OpenLineage | the standard format; Spark, Airflow, dbt and Flink integrations | a format only, it needs a backend |
+| Marquez | the simplest backend: runs and lineage, with a UI | no catalog |
+| DataHub | catalog plus column lineage; connectors for BigQuery, dbt, Airflow, Kafka, S3, Glue, Redshift | several services to run, or pay for hosting |
+| OpenMetadata | catalog, lineage and quality; simpler to run than DataHub | smaller ecosystem |
+| Spline | very detailed Spark lineage | Spark only |
+| dbt docs | the model graph, free | table level, dbt only |
+| Dagster | asset lineage as a side effect of orchestration | only what Dagster runs |
+
+Kafka is the weak spot everywhere. Confluent Cloud has Stream Lineage; otherwise producers and
+consumers have to report their own OpenLineage events.
+
+### What's wired up here
+
+| Piece | How | Proven by |
+|---|---|---|
+| column lineage for the dbt project | worked out from compiled SQL with sqlglot; ephemeral models are already inlined | `lineage/tests`, and CI on every push |
+| personal-data reach | follows every `pii_class` column downstream | CI fails if it reaches a table missing from the erasure inventory, or a served column with no tag |
+| Spark jobs | `spark.dataproc.lineage.enabled` in `submit.sh`; the OpenLineage listener elsewhere | `spark/tests/test_lineage_events.py` checks the events carry column lineage |
+| dbt under Airflow | the pod runs `dbt-ol`, with the Airflow run passed in as its parent | a local run produced DAG, task, dbt run, then each model, in one graph |
+| Dagster | its own asset graph | `openlineage-dagster` stopped being released alongside the rest of OpenLineage in October 2025, so it isn't used |
+
+```bash
+make lineage-check                                          # the checks CI runs
+uv run python -m lineage.cli trace  marts.dim_client.email  # where it came from
+uv run python -m lineage.cli impact raw.clients.email       # what it feeds
+```
+
+### Then, for the decisions around it
+
+| If | Do | Because | What it costs |
+|---|---|---|---|
+| people need to know what a change breaks | column-level lineage | table lineage says `dim_client` depends on `stg_clients`, which is always true and answers nothing | parsing SQL, or engines that report columns |
+| a column has been renamed on the way through | lineage from the SQL, not from matching names | `lower(email) as contact_email` is the same data under a new name | nothing |
+| a column can't be traced | fail the check | treating it as clean is the one mistake the check exists to prevent | the odd false alarm |
+| personal data is classified | tag it at the source, and let lineage carry it | tags added by hand on Gold miss every copy nobody thought of | tags on source columns |
+| lineage has to cover more than one cloud | OpenLineage everywhere, one backend | native catalogs stop at their own cloud | a backend to run, or pay for |
+| lineage has to be kept longer than 30 days | keep your own copy of the events (a composite transport) | Knowledge Catalog keeps 30 days | storage |
+| the project is in Europe | set the lineage `location` | the transport defaults to `us-central1` | nothing |
+| dbt runs in BigQuery | you already have its table and column lineage | BigQuery records it for every job; `dbt-ol` adds which model and which Airflow task | nothing |
+| lineage comes from `dbt-ol` | expect ephemeral models to appear as datasets | it reports them even though no table exists | a slightly noisier graph |
 

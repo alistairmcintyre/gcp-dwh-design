@@ -3,8 +3,9 @@
 A runnable reference for a governed data warehouse on GCP: a dbt project on BigQuery, orchestrated
 two ways (Cloud Composer and Dagster), with row and column level access control, Dataplex quality
 scans, a config-driven Spark framework, a Kafka ingestion pattern for a large topic estate, data
-contracts checked in CI, GDPR erasure across Kafka, the warehouse and an Iceberg lake, and a
-Beam/Dataflow module that measures what happens to BigQuery when an Avro schema gains a field.
+contracts checked in CI, GDPR erasure across Kafka, the warehouse and an Iceberg lake, column-level
+lineage worked out from the SQL, and a Beam/Dataflow module that measures what happens to BigQuery
+when an Avro schema gains a field.
 
 The data is synthetic and the business is invented. It's modelled on a retail trading platform
 (clients, orders, trades, quotes, client money) with mobile attribution events on top, because that
@@ -23,6 +24,7 @@ if/then trees with what each option costs. Start there if you want the reasoning
 | dbt project: staging, marts, tests, contracts, two targets | `dbt/` | [guide §4](docs/decision-guide.md#4-dbt-across-many-teams), [modelling across teams](docs/modelling-across-sectors.md) |
 | Access control: policy tags, masking, row policies, personas | `terraform/` | [guide §3](docs/decision-guide.md#3-access-control), [governance](docs/governance.md) |
 | GDPR erasure: crypto shredding, tombstones, the lake | `privacy/` | [guide §1](docs/decision-guide.md#1-erasure-requests), [erasure](docs/gdpr-erasure.md) |
+| Column lineage from the SQL, and the personal-data checks on it | `lineage/` | [guide §9](docs/decision-guide.md#9-lineage) |
 | Schema evolution into BigQuery, load tested | `beam/` | [guide §2](docs/decision-guide.md#2-schema-evolution-into-bigquery) |
 | Orchestration: Airflow on Composer, and Dagster | `airflow/`, `dagster/` | [guide §5](docs/decision-guide.md#5-orchestration) |
 | Kafka topic registry and generated Bronze jobs | `streaming/` | [guide §6](docs/decision-guide.md#6-kafka-ingestion) |
@@ -38,8 +40,8 @@ A repo full of YAML proves nothing on its own, so:
   with 25 assertions made as each persona; the Dataplex scans; the Beam load tests, one of them on
   deployed Dataflow.
 - **Run locally:** the dbt project on DuckDB; the Spark framework, whose tests start a real Spark
-  session; the erasure sweep, including a real Iceberg table checked file by file; the contract
-  checks; both orchestrator UIs.
+  session; the erasure sweep, including a real Iceberg table checked file by file; column lineage
+  and OpenLineage events from dbt and Spark; the contract checks; both orchestrator UIs.
 - **Designed, not deployed:** the Kafka estate. There's no cluster here beyond the local one the Beam
   tests use, and no S3 bucket; the lake tests use a local Iceberg warehouse.
 
@@ -146,7 +148,7 @@ raw_transactions      ─▶  stg_account_transactions
 make install deps data build test freshness docs lint fix dag-test verify clean
 make governance-apply governance-build governance-validate dq-report bq-data verify-cloud
 make spark-test spark-validate topics-check contracts-check metrics
-make privacy-test erasure-check erasure-deadlines erasure-sweep
+make privacy-test erasure-check erasure-deadlines erasure-sweep lineage-check
 ```
 
 `make help` describes each one.
@@ -157,6 +159,7 @@ make privacy-test erasure-check erasure-deadlines erasure-sweep
 dbt/                     the dbt project
 terraform/               modules and the dev environment
 privacy/                 erasure: key vault, crypto shredding, tombstones, the sweep, the lake
+lineage/                 column lineage from compiled dbt SQL, and the checks built on it
 beam/                    Beam/Dataflow schema-evolution module and load tests
 spark/                   config-driven Dataproc Serverless framework and job specs
 streaming/               Kafka topic registry and the job generator
@@ -167,5 +170,6 @@ docs/                    decision guide, governance, erasure, modelling across t
 scripts/                 data generator, governance checks, metrics
 ```
 
-CI runs SQLFluff, `dbt build` on DuckDB, DAG integrity, `terraform validate`, the Spark tests, the
-registry staleness check, contract compatibility, and the erasure tests including the Iceberg ones.
+CI runs SQLFluff, `dbt build` on DuckDB, the column lineage checks, DAG integrity,
+`terraform validate`, the Spark tests, the registry staleness check, contract compatibility, and the
+erasure tests including the Iceberg ones.

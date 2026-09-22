@@ -80,6 +80,40 @@ def pod_task(
     )
 
 
+# Lineage from dbt runs. On by default. Set DBT_LINEAGE=off where the OpenLineage provider isn't
+# installed or is disabled: the provider registers the parent-run macros below only when it's
+# enabled, and without them the task fails to render.
+DBT_LINEAGE = os.getenv("DBT_LINEAGE", "on") != "off"
+# Knowledge Catalog region for the lineage events. Set it: the transport's own default is
+# us-central1, so leaving it out quietly files a European project's lineage in the US.
+LINEAGE_LOCATION = os.getenv("LINEAGE_LOCATION", "europe-west2")
+
+_OL = "macros.OpenLineageProviderPlugin"
+# Who launched this dbt run, so its events hang off the Airflow task in the lineage graph: the DAG
+# is the root, the task is the parent, and each model's run sits under the dbt run.
+_OPENLINEAGE_CONTEXT = (
+    '{"parent": {'
+    f'"run": {{"runId": "{{{{ {_OL}.lineage_run_id(task_instance) }}}}"}}, '
+    f'"job": {{"namespace": "{{{{ {_OL}.lineage_job_namespace() }}}}", '
+    f'"name": "{{{{ {_OL}.lineage_job_name(task_instance) }}}}"}}, '
+    '"root": {'
+    f'"run": {{"runId": "{{{{ {_OL}.lineage_root_run_id(task_instance) }}}}"}}, '
+    f'"job": {{"namespace": "{{{{ {_OL}.lineage_root_job_namespace(task_instance) }}}}", '
+    f'"name": "{{{{ {_OL}.lineage_root_job_name(task_instance) }}}}"}}'
+    '}}}'
+)
+
+
+def _lineage_env() -> dict[str, str]:
+    return {
+        "OPENLINEAGE__TRANSPORT__TYPE": "gcplineage",
+        "OPENLINEAGE__TRANSPORT__PROJECT_ID": os.getenv("GCP_PROJECT", ""),
+        "OPENLINEAGE__TRANSPORT__LOCATION": LINEAGE_LOCATION,
+        "OPENLINEAGE_NAMESPACE": os.getenv("OPENLINEAGE_NAMESPACE", "dbt"),
+        "OPENLINEAGE_CONTEXT": _OPENLINEAGE_CONTEXT,
+    }
+
+
 def dbt_task(
     *,
     task_id: str,
@@ -91,11 +125,18 @@ def dbt_task(
     """Build a KubernetesPodOperator that runs ``dbt <dbt_args>`` in the dbt image.
 
     ``dbt_args`` is an Airflow-templated field, so you can pass ``--vars`` with ``{{ data_interval_* }}``.
+
+    With lineage on, the pod runs ``dbt-ol`` instead of ``dbt``. It runs dbt unchanged, then reads
+    the manifest and run results and reports every model's inputs, outputs and column lineage.
+    BigQuery would record table lineage for these jobs anyway; dbt-ol adds which dbt model and
+    which Airflow task each one belongs to.
     """
     return pod_task(
         task_id=task_id,
+        command=["dbt-ol"] if DBT_LINEAGE else None,
         arguments=dbt_args,
         name_prefix="dbt",
+        extra_env=_lineage_env() if DBT_LINEAGE else None,
         cpu=cpu,
         memory=memory,
         **kwargs,

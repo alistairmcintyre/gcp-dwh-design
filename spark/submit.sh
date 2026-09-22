@@ -40,6 +40,11 @@ BATCH_ID="${JOB_NAME}-$(date -u +%Y%m%d-%H%M%S)"
 FRAMEWORK_ZIP="$(mktemp -d)/framework.zip"
 python -m zipfile -c "${FRAMEWORK_ZIP}" framework/
 
+# spark.dataproc.lineage.enabled sends each batch's table and column lineage to Knowledge Catalog,
+# where it joins the BigQuery lineage dbt produces. The service account needs the lineage producer
+# permissions, which the Dataproc Worker role includes. Off Google Cloud, the same events come from
+# the OpenLineage Spark listener set in a job's spark_conf (see tests/test_lineage_events.py).
+
 # Upload the spec so the batch reads it from GCS rather than baking it into the submission.
 SPEC_URI="gs://${STAGING_BUCKET}/jobs/$(basename "${JOB_SPEC}")"
 gsutil -q cp "${JOB_SPEC}" "${SPEC_URI}"
@@ -55,6 +60,7 @@ gcloud dataproc batches submit pyspark framework/main.py \
   --subnet="${SUBNET}" \
   --labels="framework=dataproc-etl,job=${JOB_NAME}" \
   --properties="\
+spark.dataproc.lineage.enabled=true,\
 spark.executor.instances=2,\
 spark.driver.cores=4,\
 spark.executor.cores=4,\
