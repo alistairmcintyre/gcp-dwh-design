@@ -359,22 +359,41 @@ commission passes every automated check and quietly restates revenue.
 
 Code: [`lineage/`](../lineage), plus the Spark and Airflow wiring below.
 
+The usual mistake is to start by picking a tool. Start with the question the lineage has to
+answer instead. The question decides what kind of lineage you need, and that decides the tool.
+
 Lineage works when it's a by-product of running the pipelines, recorded by the engines themselves.
 It fails when it's a documentation project, because a hand-drawn graph is out of date by the next
-release. And it's only worth having if it answers a question someone actually asks.
+release.
 
-### What is it for?
+### Start here: what question does it have to answer?
 
 ```
-"What breaks if I change this column?" ....... column-level lineage, recorded automatically
-"Where did this number come from?" ........... run-level lineage: which job, which run, which inputs
-"Who owns this, and what does it mean?" ...... a catalog and glossary, curated by people
+"What breaks if I change this column?"                       impact analysis
+└── column-level lineage, recorded automatically
+    ├── GCP ............ Knowledge Catalog: BigQuery column lineage, including everything dbt runs
+    ├── AWS ............ SageMaker Catalog
+    ├── open source .... OpenLineage into DataHub or OpenMetadata, or sqlglot on your own SQL
+    └── in this repo ... lineage/: trace and impact
+
+"Where did this number come from?"                           debugging a run
+└── run-level lineage: which job, which run, which inputs, when
+    ├── GCP ............ Knowledge Catalog processes and runs (kept 30 days)
+    ├── AWS ............ SageMaker Catalog lineage events
+    ├── open source .... OpenLineage into Marquez
+    └── in this repo ... dbt-ol and the Spark listener, linked to the Airflow run that started them
+
+"Who owns this, and what does it mean?"                      governance
+└── a catalog and business glossary, curated by people
+    ├── commercial ..... Collibra, Atlan, Alation
+    ├── open source .... DataHub, OpenMetadata
+    └── when ........... after the technical lineage exists, sitting on top of it
 ```
 
-The first two are technical and should cost nobody any effort. The third is governance work, and
-it's where tools like Collibra sit: stewardship workflows, glossaries and approvals, built for
-governance teams, with technical lineage harvested in from outside. Pick that tool after the
-technical lineage exists, not instead of it.
+The first two are technical, and should cost nobody any effort once the engines report them. The
+third is governance work. That's where Collibra belongs: stewardship workflows, glossaries and
+approvals, built for governance teams, with the technical lineage harvested in from elsewhere.
+Starting a lineage effort there, before the engines report anything, is why it tends to feel heavy.
 
 ### On GCP
 
