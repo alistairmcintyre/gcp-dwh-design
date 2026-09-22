@@ -28,6 +28,7 @@ docker compose --profile airflow up --build     # Airflow 3 UI -> http://localho
 | **Governance** (`terraform/`, [`docs/governance.md`](docs/governance.md)) | Dataplex taxonomy and policy tags, dynamic data masking, row access policies, per-persona IAM, all in Terraform, applied to a real project and checked by impersonating each persona |
 | **Modelling for many teams** ([`docs/modelling-across-sectors.md`](docs/modelling-across-sectors.md)) | dbt groups and access, so one project serves Finance, Compliance, Marketing and Risk without them treading on each other, plus how the build is ordered |
 | **Schema evolution** (`beam/`) | a Beam pipeline and load tests measuring what BigQuery's Storage Write API does when a producer adds a field, including a run on real Dataflow |
+| **Decision guide** ([`docs/decision-guide.md`](docs/decision-guide.md)) | the trade-offs in this repo as if/then trees: erasure, schema evolution, access control, dbt across teams |
 | **Erasure requests** (`privacy/`, [`docs/gdpr-erasure.md`](docs/gdpr-erasure.md)) | crypto shredding and Kafka tombstones: per-subject keys, an inventory of every place a subject appears, a sweep that deletes and proves it, and a dbt test that fails if an erased client comes back |
 | **Orchestration, Airflow** (`airflow/`) | dbt baked into a container image and run by Composer through KubernetesPodOperator, with a Slack alert on failure |
 | **Orchestration, Dagster** (`dagster/`) | the same dbt project as software-defined assets, dbt tests as asset checks, daily partitions, schedules, failure sensors |
@@ -160,22 +161,31 @@ traffic flowing, lost nothing. The same setup on deployed Dataflow behaved the s
 including the check that finds blanked values and the job that backfills them from the raw table, are
 in [`beam/README.md`](beam/README.md).
 
-## Erasure requests
+## Erasure requests (GDPR)
 
-"Delete everything you hold about me" is easy to say and hard to carry out, because the data has been
-copied: into Kafka logs, Bronze, models built on Bronze, feature tables, backups, and sometimes out
-to a third party. Two mechanisms do the work, and they cover different things.
+"Delete everything you hold about me" is hard to carry out because the data has been copied: into
+Kafka logs, Bronze, models built on Bronze, feature tables, backups, and sometimes out to a third
+party. Two mechanisms do the work. **Kafka tombstones** clear the log for topics keyed by the person.
+**Crypto shredding** covers everything that can't be rewritten: each person's fields are encrypted
+with their own key before reaching Kafka, and erasing them means destroying that key.
 
-**Kafka tombstones** clear the log. A record with the subject's key and a null value on a compacted
-topic removes their history and tells every consumer to delete their copy. It only works where the
-topic is keyed by the subject and compacted, and the timing has to be pinned: compaction waits for
-closed segments, so on a quiet topic a tombstone can sit unapplied for weeks. Each topic declares
-its method in `streaming/topics.yaml` and CI rejects one that cannot deliver what it claims.
+A request lands in `raw.erasure_requests`. The next dbt build stops processing the person, and a
+nightly sweep does the rest: destroy the key, delete rows, tombstone topics, then prove nothing is
+left.
 
-**Crypto shredding** covers what cannot be rewritten. Each subject's personal fields are encrypted
-with their own key before they reach Kafka, so erasing is destroying the key: backups, partner
-extracts and records kept under a legal obligation all stop meaning anything at once. A trade has to
-survive for record-keeping; the name attached to it does not.
+| Decision | Why | Trade-off |
+|---|---|---|
+| Tombstone only topics keyed by the person and compacted | a tombstone deletes by key, and a trade topic isn't keyed by person | everything else needs encrypting at the producer |
+| Pin compaction delay per topic in the registry, checked in CI | on defaults, a quiet topic can hold a tombstone for weeks | more broker cleaner work |
+| Encrypt personal fields with one key per person | destroying the key reaches backups and extracts that can't be edited | a key vault that must never be backed up |
+| Keys in a vault, wrapped by KMS, not one KMS key per person | KMS destroys on a schedule, and per-key cost adds up | the vault is ours to run |
+| Destroy the key **before** deleting rows | a crash halfway leaves unreadable data rather than readable | none |
+| Filter the person out of staging on request, delete nightly | stopping processing is immediate (Article 18); deleting everywhere isn't | two paths to keep in step |
+| Also filter where per-person rows are derived | retained trades rebuilt an erased client on the next full build, caught in CI | the filter lives in two models |
+| Keep trades and AML records, drop the link to the person | a legal obligation outlives the request (Article 17(3)(b)) | orphaned references, tested with an explicit exception |
+| Inventory of every table holding a person | "are you sure that's all of it?" needs an answer that isn't a grep | a file to keep up to date |
+| Re-query after deleting; a dbt test asserts absence | the sweep reported success both times the rebuild bug happened | extra queries every night |
+| Randomised encryption by default, deterministic only where a join needs it | deterministic reveals which rows share a value | can't join on randomised fields |
 
 ```bash
 uv run python -m privacy.cli sweep --dry-run   # what the queue would touch
@@ -184,12 +194,10 @@ make erasure-check                             # every topic can satisfy a reque
 make erasure-deadlines                         # how long each open request has waited
 ```
 
-The sweep destroys the key first (if it dies halfway, the subject is already unreadable), deletes
-every row the inventory in `privacy/erasure_targets.yaml` marks `delete`, tombstones the keyed
-topics, then re-queries to prove nothing is left. Meanwhile `stg_clients` drops the subject on the
-next build, which is Article 18 restriction of processing and takes minutes rather than waiting for
-the sweep. What it cannot do, including trained models and the pseudonymisation argument, is written
-down in [`docs/gdpr-erasure.md`](docs/gdpr-erasure.md).
+What it can't solve (trained models, third parties, ciphertext counting as pseudonymised data until
+the key is truly gone) is in [`docs/gdpr-erasure.md`](docs/gdpr-erasure.md). The same choices as
+if/then trees, alongside schema evolution, access control and dbt, are in
+[`docs/decision-guide.md`](docs/decision-guide.md).
 
 ## Orchestration: two ways
 
@@ -272,7 +280,7 @@ spark/                   config-driven Dataproc Serverless ETL framework, job sp
 streaming/               Kafka topic registry and the Bronze offload job generator
 contracts/               data contracts (owner, SLO, PII classification, consumers)
 services/contract-api/   FastAPI contract registry for Cloud Run, behind API Gateway
-docs/                    governance, cross-team modelling, and the erasure design
+docs/                    governance, cross-team modelling, erasure, and the decision guide
 scripts/                 synthetic data generator, governance validation, metrics
 airflow/                 dbt image, KubernetesPodOperator wrapper, Composer DAGs, local demo DAG
 dagster/                 Dagster code location (assets, checks, partitions, jobs, schedules, sensors)
