@@ -34,6 +34,13 @@ jobs:
         run: uv run sqlfluff lint dbt/models
       - name: DAG compile check
         run: uv run python tests/check_dags_compile.py
+      - name: Column lineage checks
+        # Lineage worked out from the compiled SQL. Fails if personal data reaches a table the
+        # erasure inventory doesn't list, or a served column without a pii_class tag.
+        run: |
+          uv run dbt docs generate --project-dir dbt --profiles-dir dbt --target dev
+          uv run python -m pytest lineage/tests -q
+          uv run python -m lineage.cli pii
 
   dag-integrity:
     name: DAG integrity (KubernetesPodOperator)

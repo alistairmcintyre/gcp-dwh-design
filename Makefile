@@ -14,7 +14,7 @@ endif
 .PHONY: help install data deps build build-full run test seed docs freshness lint fix dag-test verify clean \
         governance-apply governance-build governance-validate governance-plan governance-destroy \
         dq-report contracts-check spark-test spark-validate topics-check metrics bq-data verify-cloud \
-        privacy-test erasure-check erasure-deadlines erasure-sweep
+        privacy-test erasure-check erasure-deadlines erasure-sweep lineage-check
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -131,6 +131,12 @@ topics-check: ## Fail if the generated Kafka offload jobs are stale vs the topic
 
 contracts-check: ## Run the data contract compatibility tests
 	cd services/contract-api && uv run --with pytest --with pyyaml --with fastapi --with httpx python -m pytest tests -q
+
+lineage-check: ## Column lineage from the compiled SQL, and the personal-data checks built on it
+	$(DBT) compile $(DBT_DIRS) --target $(TARGET) --quiet
+	$(DBT) docs generate $(DBT_DIRS) --target $(TARGET) --quiet
+	uv run python -m pytest lineage/tests -q
+	uv run python -m lineage.cli pii
 
 privacy-test: ## Erasure tests, including a real Iceberg table (downloads the runtime on first run)
 	uv run --with "pyspark==3.5.1" python -m pytest privacy/tests -q

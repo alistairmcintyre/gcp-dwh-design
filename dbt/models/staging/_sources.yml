@@ -85,12 +85,16 @@ sources:
             description: "AppsFlyer device id that registered this client."
           - name: first_name
             description: "PII. Client given name. Policy-tagged `pii.person_name` downstream."
+            meta: { pii_class: person_name }
           - name: last_name
             description: "PII. Client family name. Policy-tagged `pii.person_name` downstream."
+            meta: { pii_class: person_name }
           - name: date_of_birth
             description: "PII. Client date of birth; a KYC identity attribute. Policy-tagged `pii.date_of_birth`."
+            meta: { pii_class: date_of_birth }
           - name: email
             description: "PII. Client email address. Policy-tagged `pii.contact` downstream."
+            meta: { pii_class: contact }
           - name: registration_time
             description: "UTC timestamp the client registered."
             data_tests: [not_null]
