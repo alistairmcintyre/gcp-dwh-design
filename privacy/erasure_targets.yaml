@@ -84,3 +84,25 @@ targets:
       already trained on it has not forgotten, which is a separate and much harder problem. The
       practical answer is a retraining cadence that ages out erased subjects, recorded here so the
       gap is visible.
+
+  # ---- Lake: Iceberg on object storage ---------------------------------------------------------
+  # Example of how lake tables are declared. They go in the same inventory so nothing is forgotten,
+  # and are swept by privacy/lakehouse.py from a Spark job, because only an engine that understands
+  # Iceberg can rewrite the files. A DELETE on its own leaves the row in the Parquet file; see
+  # docs/gdpr-erasure.md for the steps that actually remove it.
+  - table: lake.crm.clients
+    engine: iceberg
+    location: s3://example-lake/warehouse/crm/clients
+    action: delete
+    note: >
+      Personal columns are written with metrics mode none, so the manifests never hold a person's
+      email as a file's min or max value, and there is nothing in the metadata to erase.
+
+  - table: lake.events.app_events
+    engine: iceberg
+    location: s3://example-lake/warehouse/events/app_events
+    action: delete
+    note: >
+      Partitioned by bucket(64, client_id), so one person's rows sit in one bucket and an erasure
+      rewrites about 1/64 of the table rather than all of it. Partitioning by client_id directly
+      would do the same job with millions of tiny files.

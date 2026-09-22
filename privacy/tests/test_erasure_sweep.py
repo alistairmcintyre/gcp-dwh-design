@@ -140,3 +140,23 @@ def test_shipped_inventory_parses_and_every_retain_states_its_basis():
         assert target.action in {"delete", "shred", "retain", "none"}
         if target.action == "retain":
             assert target.lawful_basis, f"{target.table} retains data without naming a lawful basis"
+
+
+def test_lake_tables_are_left_to_the_spark_job(warehouse):
+    """The warehouse sweep can't rewrite Parquet, so it must not try, but it must still know."""
+    targets = [
+        Target(table="raw.clients", action="delete", key_column="client_id"),
+        Target(table="lake.crm.clients", action="delete", key_column="client_id",
+               engine="iceberg", location="s3://example-lake/warehouse/crm/clients"),
+    ]
+    service = ErasureService(DuckDBKeyVault(warehouse), DuckDBWarehouse(warehouse), targets)
+
+    assert [t.table for t in service.targets] == ["raw.clients"]
+    assert [t.table for t in service.lake_targets] == ["lake.crm.clients"]
+    assert set(service.erase("cli-1").rows_deleted) == {"raw.clients"}
+
+
+def test_shipped_lake_targets_say_where_they_live():
+    for target in load_targets():
+        if target.engine == "iceberg":
+            assert target.location, f"{target.table} is a lake table with no storage location"

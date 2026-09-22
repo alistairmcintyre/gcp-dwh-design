@@ -132,8 +132,8 @@ topics-check: ## Fail if the generated Kafka offload jobs are stale vs the topic
 contracts-check: ## Run the data contract compatibility tests
 	cd services/contract-api && uv run --with pytest --with pyyaml --with fastapi --with httpx python -m pytest tests -q
 
-privacy-test: ## Run the erasure and crypto shredding tests
-	uv run python -m pytest privacy/tests -q
+privacy-test: ## Erasure tests, including a real Iceberg table (downloads the runtime on first run)
+	uv run --with "pyspark==3.5.1" python -m pytest privacy/tests -q
 
 erasure-check: ## Every topic can satisfy an erasure request (CI gate)
 	uv run python -m privacy.cli check-topics

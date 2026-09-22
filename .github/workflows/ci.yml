@@ -125,8 +125,12 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      - name: Erasure tests
-        run: uv run --with pytest --with pyyaml --with duckdb --with cryptography python -m pytest privacy/tests -q
+      - name: Erasure tests, including a real Iceberg table
+        # The Iceberg tests read the Parquet files directly, because every query through the table
+        # agrees a row is gone the moment DELETE commits, while the bytes are still on storage.
+        run: >
+          uv run --with pytest --with pyyaml --with duckdb --with cryptography --with "pyspark==3.5.1"
+          python -m pytest privacy/tests -q
       - name: Every topic can satisfy an erasure request
         # A topic that carries personal data with no workable erasure method is a deletion you
         # cannot perform, and it stays invisible until somebody asks you to prove one.

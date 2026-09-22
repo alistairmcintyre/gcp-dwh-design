@@ -87,6 +87,9 @@ request lands in raw.erasure_requests
                3. plan and produce tombstones for keyed topics    (log, within the pinned delay)
                4. re-query every delete target and prove it is 0
                5. write completed_at and the row count
+        │
+        └─ nightly Spark job, privacy/lakehouse.py
+               Iceberg tables in the inventory: delete, rewrite files, expire snapshots
 ```
 
 Step 1 comes first on purpose. If the job dies halfway through, a subject whose key is already
@@ -100,6 +103,7 @@ shred leaves readable data with the key still sitting there.
 | Silver | Subject filtered out of `stg_clients` on the next build | `dbt/models/staging/stg_clients.sql` |
 | Gold and features | Rows deleted by the sweep, absence asserted by a test | `dbt/tests/assert_erased_clients_absent.sql` |
 | Key vault | Key row deleted, audit row written with no personal data in it | `privacy/vault.py` |
+| Lake (Iceberg on S3 or GCS) | Delete, rewrite the files, expire old snapshots, from a Spark job | `privacy/lakehouse.py` |
 | Orchestration | Daily, both stacks | `airflow/dags/gdpr_erasure_dag.py`, `dagster/dwh_dagster/privacy_jobs.py` |
 
 ## Deleting from Gold is not enough on its own
@@ -119,6 +123,114 @@ a per-client activity profile from it the next morning.
 
 Worth knowing because the same shape appears anywhere a fact outlives its dimension: a warehouse that
 can rebuild a person from what it is allowed to keep has not really erased them.
+
+## Files in object storage: Parquet and Iceberg on S3
+
+Parquet files can't be edited. No row is ever deleted in place: you write a new file without it and
+then get rid of the old one. Object storage and table formats both keep the old one around on
+purpose, so this is where "we deleted it" is most often untrue.
+
+```
+Parquet on S3
+├── in a table format (Iceberg, Delta, Hudi)
+│   ├── copy-on-write .... DELETE rewrites the files, but the previous snapshot still
+│   │                      points at the old one
+│   └── merge-on-read .... DELETE writes a delete file; the row is still in the data file
+│       either way: rewrite the files, then expire the snapshots that use the old ones
+├── plain Parquet, no table format
+│   ├── bucketed by person ..... rewrite the few files for their bucket
+│   └── not ................... find the files (bloom filters or a lookup table), rewrite each
+└── can't be rewritten (Object Lock, legal hold, a copy a partner holds)
+    └── crypto shredding, and only if the fields were encrypted per person at write time
+```
+
+### The Iceberg steps, as measured
+
+`privacy/lakehouse.py` runs these, and `privacy/tests/test_iceberg_erasure.py` checks each one by
+reading the Parquet files directly. Every query through the table agrees the row is gone as soon as
+`DELETE` commits, so those queries can't be the test.
+
+| Step | What it does | Row still in a file on disk? |
+|---|---|---|
+| `DELETE` | queries stop returning the row | **yes**, in both copy-on-write and merge-on-read |
+| `rewrite_data_files` | writes a new file without the row | **yes**, the old file is kept for old snapshots |
+| `rewrite_position_delete_files` | drops delete files that point at rewritten data | yes |
+| `expire_snapshots` | deletes the files only old snapshots used | **no** |
+| `remove_orphan_files` | catches files from writes that failed before committing | no; scheduled, not per request |
+
+Things the tests turned up that the documentation doesn't make obvious:
+
+- **The time zone.** Procedure timestamps are read in the Spark session's zone. A cutoff built in
+  UTC and passed to a session on London time lands an hour early in summer, so nothing is expired
+  and the call still reports success. The tests run on a London-time session to keep this honest.
+- **Delete files outlive the data they pointed at.** Neither `remove-dangling-deletes` nor
+  `use-starting-sequence-number=false` cleared them. `rewrite_position_delete_files` did. A position
+  delete holds a file path and a row number, not personal data, but an equality delete holds the key
+  value itself.
+- **`remove_orphan_files` refuses a window under 24 hours.** Add a day to the timeline.
+- **Manifests hold each file's min and max value per column**, which can be the start of someone's
+  email. Set `write.metadata.metrics.column.<col>` to `none` for personal columns and there's nothing
+  there to erase.
+- **Tags and branches pin snapshots.** `expire_snapshots` won't touch a tagged snapshot, so a table
+  holding personal data shouldn't carry long-lived tags.
+
+For Delta the same idea is `DELETE`, then `REORG TABLE ... APPLY (PURGE)` if deletion vectors are on,
+then `VACUUM` (7 days by default). Its transaction log keeps column stats for 30 days by default.
+
+### Then S3 keeps its own copies
+
+| If the bucket has | The data survives in | Fix |
+|---|---|---|
+| versioning | the previous object version | a lifecycle rule expiring noncurrent versions |
+| replication | the replica bucket | the same rule on every replica; deleting a specific version doesn't replicate |
+| Object Lock in compliance mode | the locked object, which nobody can delete, root included | crypto shredding only |
+| failed multipart uploads | uploaded parts you can't see in a listing | abort incomplete uploads after a day |
+| Athena, EMR or Spark results and temp files | the results prefix | a lifecycle rule on those prefixes |
+| personal data in object keys or partition paths | access logs and inventory reports | never put it there |
+
+S3's own encryption doesn't help with any of this. SSE-KMS uses one key for the bucket, so
+destroying it erases everyone rather than one person, and Parquet's built-in column encryption uses
+a key per column rather than per person. Per-person shredding has to happen in the application, as
+`privacy/crypto.py` does, before the file is written.
+
+The bucket side, in Terraform:
+
+```hcl
+resource "aws_s3_bucket_versioning" "lake" {
+  bucket = aws_s3_bucket.lake.id
+  versioning_configuration { status = "Enabled" }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "lake" {
+  bucket = aws_s3_bucket.lake.id
+
+  rule {
+    id     = "erasure"
+    status = "Enabled"
+    filter {}
+
+    # An erased row's old file becomes a noncurrent version when it's deleted. Without this it
+    # stays in the bucket for as long as versioning does, which is forever.
+    noncurrent_version_expiration { noncurrent_days = 3 }
+
+    # Parts of a failed write hold real data and don't show in a normal listing.
+    abort_incomplete_multipart_upload { days_after_initiation = 1 }
+  }
+}
+```
+
+### Fitting it inside the month
+
+| Day | What happens |
+|---|---|
+| 0 | request lands; the next dbt build stops processing the person |
+| 0 to 1 | nightly Spark job: delete, rewrite, expire snapshots older than a few hours |
+| up to 3 | the old objects, now noncurrent versions, expire |
+| weekly | `remove_orphan_files` with its 24-hour floor (3 days by default) |
+
+Under two weeks end to end, but only because those retention settings were chosen with erasure in
+mind. On defaults, snapshot retention (5 days), Delta's `VACUUM` (7 days) and its log (30 days) add up
+quickly, and versioning with no lifecycle rule never finishes at all.
 
 ## The inventory is the real artefact
 

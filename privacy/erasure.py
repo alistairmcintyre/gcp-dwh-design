@@ -29,6 +29,10 @@ class Target:
     key_column: str
     lawful_basis: str | None = None
     note: str | None = None
+    # warehouse targets are swept here with DML. iceberg targets live in object storage and need an
+    # engine that can rewrite Parquet files, so privacy/lakehouse.py handles them from a Spark job.
+    engine: str = "warehouse"
+    location: str | None = None
 
 
 @dataclasses.dataclass
@@ -64,6 +68,8 @@ def load_targets(path: pathlib.Path = TARGETS_FILE) -> list[Target]:
             key_column=entry.get("key_column", default_key),
             lawful_basis=entry.get("lawful_basis"),
             note=entry.get("note"),
+            engine=entry.get("engine", "warehouse"),
+            location=entry.get("location"),
         )
         for entry in spec["targets"]
     ]
@@ -74,7 +80,11 @@ class ErasureService:
                  tombstone_planner=None) -> None:
         self.vault = vault
         self.warehouse = warehouse
-        self.targets = targets if targets is not None else load_targets()
+        all_targets = targets if targets is not None else load_targets()
+        # Only what DML can reach. Lake tables are listed in the same inventory so nothing is
+        # forgotten, and swept by the Spark job that can actually rewrite their files.
+        self.targets = [t for t in all_targets if t.engine == "warehouse"]
+        self.lake_targets = [t for t in all_targets if t.engine != "warehouse"]
         self.tombstone_planner = tombstone_planner
 
     def erase(self, subject_id: str, reason: str = "erasure_request") -> ErasureResult:
