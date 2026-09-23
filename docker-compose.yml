@@ -186,7 +186,56 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
+  # ---- lineage --------------------------------------------------------------------------------
+  # Marquez: the reference OpenLineage backend. Everything that reports lineage here (dbt, Spark,
+  # Airflow) sends the same events it would send to Knowledge Catalog or SageMaker Catalog, so this
+  # is the graph without a cloud account. `make lineage-demo` fills it.
+  marquez-db:
+    image: postgres:14
+    profiles: ["lineage"]
+    environment:
+      # The Marquez dev config expects this database, user and password by name.
+      POSTGRES_USER: marquez
+      POSTGRES_PASSWORD: marquez
+      POSTGRES_DB: marquez
+    volumes:
+      - marquez_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marquez"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  marquez-api:
+    image: marquezproject/marquez:0.51.1
+    profiles: ["lineage"]
+    environment:
+      MARQUEZ_PORT: "5000"
+      MARQUEZ_ADMIN_PORT: "5001"
+      POSTGRES_HOST: marquez-db
+      POSTGRES_PORT: "5432"
+    ports:
+      - "5000:5000"
+      - "5001:5001"
+    depends_on:
+      marquez-db:
+        condition: service_healthy
+
+  marquez-web:
+    image: marquezproject/marquez-web:0.51.1
+    profiles: ["lineage"]
+    environment:
+      MARQUEZ_HOST: marquez-api
+      MARQUEZ_PORT: "5000"
+      WEB_PORT: "3000"
+    # 3001 on the host: the Dagster UI already has 3000.
+    ports:
+      - "3001:3000"
+    depends_on:
+      - marquez-api
+
 volumes:
   dagster_pg:
   dagster_data:
   airflow_pg:
+  marquez_pg:

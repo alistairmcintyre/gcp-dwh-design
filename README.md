@@ -24,7 +24,7 @@ if/then trees with what each option costs. Start there if you want the reasoning
 | dbt project: staging, marts, tests, contracts, two targets | `dbt/` | [guide §4](docs/decision-guide.md#4-dbt-across-many-teams), [modelling across teams](docs/modelling-across-sectors.md) |
 | Access control: policy tags, masking, row policies, personas | `terraform/` | [guide §3](docs/decision-guide.md#3-access-control), [governance](docs/governance.md) |
 | GDPR erasure: crypto shredding, tombstones, the lake | `privacy/` | [guide §1](docs/decision-guide.md#1-erasure-requests), [erasure](docs/gdpr-erasure.md) |
-| Column lineage from the SQL, and the personal-data checks on it | `lineage/` | [guide §9](docs/decision-guide.md#9-lineage) |
+| Column lineage from the SQL, the personal-data checks on it, and a local Marquez UI | `lineage/` | [guide §9](docs/decision-guide.md#9-lineage) |
 | Schema evolution into BigQuery, load tested | `beam/` | [guide §2](docs/decision-guide.md#2-schema-evolution-into-bigquery) |
 | Orchestration: Airflow on Composer, and Dagster | `airflow/`, `dagster/` | [guide §5](docs/decision-guide.md#5-orchestration) |
 | Kafka topic registry and generated Bronze jobs | `streaming/` | [guide §6](docs/decision-guide.md#6-kafka-ingestion) |
@@ -148,7 +148,7 @@ raw_transactions      ─▶  stg_account_transactions
 make install deps data build test freshness docs lint fix dag-test verify clean
 make governance-apply governance-build governance-validate dq-report bq-data verify-cloud
 make spark-test spark-validate topics-check contracts-check metrics
-make privacy-test erasure-check erasure-deadlines erasure-sweep lineage-check
+make privacy-test erasure-check erasure-deadlines erasure-sweep lineage-check lineage-demo
 ```
 
 `make help` describes each one.

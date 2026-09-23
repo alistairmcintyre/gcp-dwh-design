@@ -469,6 +469,31 @@ uv run python -m lineage.cli trace  marts.dim_client.email  # where it came from
 uv run python -m lineage.cli impact raw.clients.email       # what it feeds
 ```
 
+### Seeing the graph locally
+
+Knowledge Catalog and SageMaker Catalog both need a cloud account. Marquez is the OpenLineage
+reference backend and runs in Docker, so the same events can be looked at offline:
+
+```bash
+make lineage-demo     # starts Marquez, runs dbt through dbt-ol and a Spark job into it
+                      # UI: http://localhost:3001, namespace dwh-local
+docker compose --profile lineage down
+```
+
+That fills it with 38 jobs (every dbt model and test, plus the Spark job), 20 dbt datasets and the
+Spark job's files, with column lineage on both. Two things that caught me out:
+
+- **Marquez's web UI wants port 3000**, which the Dagster UI already uses here, so it's mapped to
+  3001.
+- **A dataset namespace containing a colon breaks the column-lineage API.** Marquez node ids are
+  colon-separated, and dbt on DuckDB reports the namespace as `duckdb://data/dev.duckdb`. The facet
+  is stored either way, and on BigQuery the namespace is just `bigquery`, so this is a local quirk
+  rather than something to design around.
+
+Jobs and datasets live in separate namespaces by design: jobs under the one you set, datasets under
+wherever the data actually is. Two engines join up in the graph where they touch the same dataset,
+which in practice means a table one writes and the other reads.
+
 ### Then, for the decisions around it
 
 | If | Do | Because | What it costs |

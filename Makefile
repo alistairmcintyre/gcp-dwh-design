@@ -4,6 +4,7 @@ SHELL := /bin/bash
 DBT := uv run dbt
 DBT_DIRS := --project-dir dbt --profiles-dir dbt
 TARGET ?= dev
+MARQUEZ_URL ?= http://localhost:5000
 
 # Load .env if present so DUCKDB_PATH / GCP vars are available.
 ifneq (,$(wildcard .env))
@@ -14,7 +15,7 @@ endif
 .PHONY: help install data deps build build-full run test seed docs freshness lint fix dag-test verify clean \
         governance-apply governance-build governance-validate governance-plan governance-destroy \
         dq-report contracts-check spark-test spark-validate topics-check metrics bq-data verify-cloud \
-        privacy-test erasure-check erasure-deadlines erasure-sweep lineage-check
+        privacy-test erasure-check erasure-deadlines erasure-sweep lineage-check lineage-demo
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -137,6 +138,15 @@ lineage-check: ## Column lineage from the compiled SQL, and the personal-data ch
 	$(DBT) docs generate $(DBT_DIRS) --target $(TARGET) --quiet
 	uv run python -m pytest lineage/tests -q
 	uv run python -m lineage.cli pii
+
+lineage-demo: ## Fill a local Marquez with lineage from dbt and a Spark job (UI on :3001)
+	docker compose --profile lineage up -d --wait
+	OPENLINEAGE_URL=$(MARQUEZ_URL) OPENLINEAGE_NAMESPACE=dwh-local \
+	  uv run --with openlineage-dbt dbt-ol build $(DBT_DIRS) --target $(TARGET)
+	uv run --with "pyspark==3.5.1" python scripts/lineage_demo.py --marquez $(MARQUEZ_URL)
+	@echo ""
+	@echo "lineage UI: http://localhost:3001  (namespace dwh-local)"
+	@echo "stop it with: docker compose --profile lineage down"
 
 privacy-test: ## Erasure tests, including a real Iceberg table (downloads the runtime on first run)
 	uv run --with "pyspark==3.5.1" python -m pytest privacy/tests -q
